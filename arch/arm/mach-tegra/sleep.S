@@ -451,6 +451,8 @@ ENDPROC(tegra_cpu_pllp)
 #endif
 
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
+.arch_extension sec
+
 /*
  * tegra_generic_smc
  *
