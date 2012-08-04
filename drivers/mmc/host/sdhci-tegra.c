@@ -998,7 +998,7 @@ static int tegra_sdhci_pltfm_init(struct sdhci_host *host,
 	tegra_host->instance = pdev->id;
 	tegra_host->dpd = tegra_io_dpd_get(mmc_dev(host->mmc));
 
-	host->mmc->caps |= MMC_CAP_ERASE;
+	//host->mmc->caps |= MMC_CAP_ERASE; // Disabled as a precaution
 	host->mmc->caps |= MMC_CAP_DISABLE;
 	/* enable 1/8V DDR capable */
 	host->mmc->caps |= MMC_CAP_1_8V_DDR;
