@@ -100,7 +100,7 @@ asflags-y := -Wa,-march=all
 
 # Provide size of uncompressed kernel to the decompressor via a linker symbol.
 ifeq ($(shell uname -s),Darwin)
-LDFLAGS_vmlinux = --defsym _image_size=$(shell gstat -c "%s" $(obj)/../Image)
+LDFLAGS_vmlinux = --defsym _image_size=$(shell stat -f "%z" $(obj)/../Image)
 else
 LDFLAGS_vmlinux = --defsym _image_size=$(shell stat -c "%s" $(obj)/../Image)
 endif
