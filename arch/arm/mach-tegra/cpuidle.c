@@ -56,9 +56,7 @@ struct cpuidle_driver tegra_idle = {
 };
 
 static DEFINE_PER_CPU(struct cpuidle_device *, idle_devices);
-#if defined(CONFIG_ARCH_ACER_T30)
-extern int is_enable_tick_nohz(void);
-#endif
+
 static int tegra_idle_enter_lp3(struct cpuidle_device *dev,
 	struct cpuidle_state *state)
 {
@@ -71,14 +69,8 @@ static int tegra_idle_enter_lp3(struct cpuidle_device *dev,
 	local_fiq_disable();
 
 	enter = ktime_get();
-#if defined(CONFIG_ARCH_ACER_T30)
-	/*
-	Workaround for cpu hot-plug hang
-	Prevent enter wfi during cpu hot-plug process until it's finish
-	*/
-	if(!is_enable_tick_nohz())
-#endif
-		tegra_cpu_wfi();
+
+	tegra_cpu_wfi();
 
 	exit = ktime_sub(ktime_get(), enter);
 	us = ktime_to_us(exit);

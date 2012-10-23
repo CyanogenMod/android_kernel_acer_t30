@@ -26,7 +26,10 @@ struct a1026_platform_data {
 #define A1026_DOWNLOAD_MODE         _IOW(A1026_IOCTL_MAGIC, 0x04, void *)
 #define A1026_SET_CONFIG            _IOW(A1026_IOCTL_MAGIC, 0x05, enum A1026_TableID)
 #define A1026_NOISE_LEVEL           _IOW(A1026_IOCTL_MAGIC, 0x06, enum Noise_Level_Value)
+#define A1026_WIDENING_MODE         _IOW(A1026_IOCTL_MAGIC, 0x07, enum Widening_Mode_Value)
+#define A1026_WIDENING_GAIN         _IOW(A1026_IOCTL_MAGIC, 0x08, enum Widening_Gain_Value)
 
+#define DISABLE_A1026_TOOLS_PERMISSION 1
 #define ENABLE_DIAG_IOCTLS 1
 /* For Diag */
 #define A1026_SYNC_CMD              _IOW(A1026_IOCTL_MAGIC, 0x50, void *)
@@ -58,12 +61,9 @@ struct a1026_platform_data {
 #define PassThrough_Disable         0x80520000
 #define PassThrough_A_to_C          0x80520048
 #define NOISE_LEVEL_COMMAND         0X8017004B
-
-/* Pass through Enable bypass switch */
-#if 0
-#define BYPASS_SWITCH_ENABLE
-#define BYPASS_DISABLED_TIME        100
-#endif
+#define WIDENING_MODE_COMMAND       0X80171006
+#define WIDENING_GAIN_COMMAND       0x80171007
+#define ES305_SW_RESET              0x80020000
 
 enum A1026_TableID {
 	A1026_TABLE_VOIP_INTMIC,
@@ -97,6 +97,25 @@ enum Noise_Level_Value {
 	A1026_NOISE_LEVEL_8,
 	A1026_NOISE_LEVEL_9,
 	A1026_NOISE_LEVEL_10
+};
+
+enum Widening_Mode_Value {
+	A1026_WIDENING_MODE_0=0x80180000,
+	A1026_WIDENING_MODE_1,
+	A1026_WIDENING_MODE_2,
+};
+
+enum Widening_Gain_Value {
+	A1026_WIDENING_GAIN_6=0x80180006,
+	A1026_WIDENING_GAIN_7,
+	A1026_WIDENING_GAIN_8,
+	A1026_WIDENING_GAIN_9,
+	A1026_WIDENING_GAIN_10,
+	A1026_WIDENING_GAIN_11,
+	A1026_WIDENING_GAIN_12,
+	A1026_WIDENING_GAIN_13,
+	A1026_WIDENING_GAIN_14,
+	A1026_WIDENING_GAIN_15,
 };
 
 /* audio table */

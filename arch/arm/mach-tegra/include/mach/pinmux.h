@@ -166,6 +166,13 @@ enum tegra_pullupdown {
 	TEGRA_PUPD_PULL_UP,
 };
 
+#if defined(CONFIG_ARCH_ACER_T30)
+enum tegra_e_input {
+	TEGRA_E_INPUT_DISABLE = 0,
+	TEGRA_E_INPUT_ENABLE,
+};
+#endif
+
 enum tegra_tristate {
 	TEGRA_TRI_NORMAL = 0,
 	TEGRA_TRI_TRISTATE = 1,
@@ -357,6 +364,10 @@ int tegra_pinmux_get_pingroup(int gpio_nr);
 int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg,
 	enum tegra_pullupdown pupd);
 
+#if defined(CONFIG_ARCH_ACER_T30)
+int tegra_pinmux_set_e_input_bit(enum tegra_pingroup pg,
+	enum tegra_e_input e_input);
+#endif
 void tegra_pinmux_config_table(const struct tegra_pingroup_config *config,
 	int len);
 

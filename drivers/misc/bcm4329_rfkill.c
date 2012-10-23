@@ -191,6 +191,13 @@ static void bcm4330_gpio_state(void)
 
 static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 {
+	/*
+	 * check if BT gpio_shutdown line status and current request are same.
+	 * If same, then return, else perform requested operation.
+	 */
+	if (gpio_get_value(bcm4329_rfkill->gpio_shutdown) && !blocked)
+		return 0;
+
 	if (blocked) {
 		pr_info("%s: BT Power off.\n", __func__);
 
@@ -207,7 +214,7 @@ static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 		if (bcm4329_rfkill->bt_32k_clk) {
 			clk_disable(bcm4329_rfkill->bt_32k_clk);
 			pr_info("%s: bcm4329_rfkill->bt_32k_clk = disable.\n", __func__);
-		}
+        }
 
 #if defined(CONFIG_MACH_PICASSO_E) || defined(CONFIG_MACH_PICASSO2) || defined(CONFIG_MACH_PICASSO_M) || defined(CONFIG_MACH_PICASSO_E2) || defined(CONFIG_MACH_PICASSO_MF)
 		if (bcm4329_rfkill->gpio_bcm_vdd) {
@@ -222,7 +229,7 @@ static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 		tegra_uart_fun_off();
 #endif
 
-	} else {
+	    } else {
 		pr_info("%s: BT Power on.\n", __func__);
 
 #if defined(CONFIG_MACH_PICASSO2) || defined(CONFIG_MACH_PICASSO_M) || defined(CONFIG_MACH_PICASSO_E2) || defined(CONFIG_MACH_PICASSO_MF)
@@ -238,10 +245,10 @@ static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 			}
 		}
 #endif
-		if (bcm4329_rfkill->bt_32k_clk) {
+        if (bcm4329_rfkill->bt_32k_clk) {
 			clk_enable(bcm4329_rfkill->bt_32k_clk);
 			pr_info("%s: bcm4329_rfkill->bt_32k_clk = enable.\n", __func__);
-		}
+        }
 
 		if (bcm4329_rfkill->gpio_shutdown)
 		{
@@ -256,7 +263,7 @@ static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 			pr_info("%s: bcm4329_rfkill->gpio_reset = 1.\n", __func__);
 			gpio_direction_output(bcm4329_rfkill->gpio_reset, 1);
 		}
-    }
+	}
 	return 0;
 }
 
@@ -296,7 +303,9 @@ static int bcm4329_rfkill_probe(struct platform_device *pdev)
 		ret = gpio_request(bcm4329_rfkill->gpio_reset,
 						"bcm4329_nreset_gpio");
 	} else {
-		pr_warn("%s : can't find reset gpio.\n", __func__);
+		pr_warn("%s : can't find reset gpio. "
+			"reset gpio may not be defined for "
+			"this platform \n", __func__);
 		bcm4329_rfkill->gpio_reset = 0;
 	}
 
@@ -308,7 +317,9 @@ static int bcm4329_rfkill_probe(struct platform_device *pdev)
 		ret = gpio_request(bcm4329_rfkill->gpio_shutdown,
 						"bcm4329_nshutdown_gpio");
 	} else {
-		pr_warn("%s : can't find shutdown gpio.\n", __func__);
+		pr_warn("%s : can't find shutdown gpio "
+			"shutdown gpio may not be defined for "
+			"this platform \n", __func__);
 		bcm4329_rfkill->gpio_shutdown = 0;
 	}
 

@@ -78,6 +78,8 @@ struct throtl_grp {
 
 	/* Some throttle limits got updated for the group */
 	int limits_changed;
+
+	struct rcu_head rcu_head;
 };
 
 struct throtl_data
@@ -88,7 +90,7 @@ struct throtl_data
 	/* service tree for active throtl groups */
 	struct throtl_rb_root tg_service_tree;
 
-	struct throtl_grp root_tg;
+	struct throtl_grp *root_tg;
 	struct request_queue *queue;
 
 	/* Total Number of queued bios on READ and WRITE lists */
@@ -140,9 +142,9 @@ static inline struct throtl_grp *tg_of_blkg(struct blkio_group *blkg)
 	return NULL;
 }
 
-static inline int total_nr_queued(struct throtl_data *td)
+static inline unsigned int total_nr_queued(struct throtl_data *td)
 {
-	return (td->nr_queued[0] + td->nr_queued[1]);
+	return td->nr_queued[0] + td->nr_queued[1];
 }
 
 static inline struct throtl_grp *throtl_ref_get_tg(struct throtl_grp *tg)
@@ -151,12 +153,31 @@ static inline struct throtl_grp *throtl_ref_get_tg(struct throtl_grp *tg)
 	return tg;
 }
 
+static void throtl_free_tg(struct rcu_head *head)
+{
+	struct throtl_grp *tg;
+
+	tg = container_of(head, struct throtl_grp, rcu_head);
+	free_percpu(tg->blkg.stats_cpu);
+	kfree(tg);
+}
+
 static void throtl_put_tg(struct throtl_grp *tg)
 {
 	BUG_ON(atomic_read(&tg->ref) <= 0);
 	if (!atomic_dec_and_test(&tg->ref))
 		return;
-	kfree(tg);
+
+	/*
+	 * A group is freed in rcu manner. But having an rcu lock does not
+	 * mean that one can access all the fields of blkg and assume these
+	 * are valid. For example, don't try to follow throtl_data and
+	 * request queue links.
+	 *
+	 * Having a reference to blkg under an rcu allows acess to only
+	 * values local to groups like group stats and group rate limits
+	 */
+	call_rcu(&tg->rcu_head, throtl_free_tg);
 }
 
 static void throtl_init_group(struct throtl_grp *tg)
@@ -188,16 +209,50 @@ throtl_add_group_to_td_list(struct throtl_data *td, struct throtl_grp *tg)
 	td->nr_undestroyed_grps++;
 }
 
-static void throtl_init_add_tg_lists(struct throtl_data *td,
-			struct throtl_grp *tg, struct blkio_cgroup *blkcg)
+static void
+__throtl_tg_fill_dev_details(struct throtl_data *td, struct throtl_grp *tg)
 {
 	struct backing_dev_info *bdi = &td->queue->backing_dev_info;
 	unsigned int major, minor;
 
+	if (!tg || tg->blkg.dev)
+		return;
+
+	/*
+	 * Fill in device details for a group which might not have been
+	 * filled at group creation time as queue was being instantiated
+	 * and driver had not attached a device yet
+	 */
+	if (bdi->dev && dev_name(bdi->dev)) {
+		sscanf(dev_name(bdi->dev), "%u:%u", &major, &minor);
+		tg->blkg.dev = MKDEV(major, minor);
+	}
+}
+
+/*
+ * Should be called with without queue lock held. Here queue lock will be
+ * taken rarely. It will be taken only once during life time of a group
+ * if need be
+ */
+static void
+throtl_tg_fill_dev_details(struct throtl_data *td, struct throtl_grp *tg)
+{
+	if (!tg || tg->blkg.dev)
+		return;
+
+	spin_lock_irq(td->queue->queue_lock);
+	__throtl_tg_fill_dev_details(td, tg);
+	spin_unlock_irq(td->queue->queue_lock);
+}
+
+static void throtl_init_add_tg_lists(struct throtl_data *td,
+			struct throtl_grp *tg, struct blkio_cgroup *blkcg)
+{
+	__throtl_tg_fill_dev_details(td, tg);
+
 	/* Add group onto cgroup list */
-	sscanf(dev_name(bdi->dev), "%u:%u", &major, &minor);
 	blkiocg_add_blkio_group(blkcg, &tg->blkg, (void *)td,
-				MKDEV(major, minor), BLKIO_POLICY_THROTL);
+				tg->blkg.dev, BLKIO_POLICY_THROTL);
 
 	tg->bps[READ] = blkcg_get_read_bps(blkcg, tg->blkg.dev);
 	tg->bps[WRITE] = blkcg_get_write_bps(blkcg, tg->blkg.dev);
@@ -211,10 +266,18 @@ static void throtl_init_add_tg_lists(struct throtl_data *td,
 static struct throtl_grp *throtl_alloc_tg(struct throtl_data *td)
 {
 	struct throtl_grp *tg = NULL;
+	int ret;
 
 	tg = kzalloc_node(sizeof(*tg), GFP_ATOMIC, td->queue->node);
 	if (!tg)
 		return NULL;
+
+	ret = blkio_alloc_blkg_stats(&tg->blkg);
+
+	if (ret) {
+		kfree(tg);
+		return NULL;
+	}
 
 	throtl_init_group(tg);
 	return tg;
@@ -225,70 +288,29 @@ throtl_grp *throtl_find_tg(struct throtl_data *td, struct blkio_cgroup *blkcg)
 {
 	struct throtl_grp *tg = NULL;
 	void *key = td;
-	struct backing_dev_info *bdi = &td->queue->backing_dev_info;
-	unsigned int major, minor;
 
 	/*
 	 * This is the common case when there are no blkio cgroups.
  	 * Avoid lookup in this case
  	 */
 	if (blkcg == &blkio_root_cgroup)
-		tg = &td->root_tg;
+		tg = td->root_tg;
 	else
 		tg = tg_of_blkg(blkiocg_lookup_group(blkcg, key));
 
-	/* Fill in device details for root group */
-	if (tg && !tg->blkg.dev && bdi->dev && dev_name(bdi->dev)) {
-		sscanf(dev_name(bdi->dev), "%u:%u", &major, &minor);
-		tg->blkg.dev = MKDEV(major, minor);
-	}
-
-	if (tg)
-		goto done;
-
-	tg = kzalloc_node(sizeof(*tg), GFP_ATOMIC, td->queue->node);
-	if (!tg)
-		goto done;
-
-	INIT_HLIST_NODE(&tg->tg_node);
-	RB_CLEAR_NODE(&tg->rb_node);
-	bio_list_init(&tg->bio_lists[0]);
-	bio_list_init(&tg->bio_lists[1]);
-	td->limits_changed = false;
-
-	/*
-	 * Take the initial reference that will be released on destroy
-	 * This can be thought of a joint reference by cgroup and
-	 * request queue which will be dropped by either request queue
-	 * exit or cgroup deletion path depending on who is exiting first.
-	 */
-	atomic_set(&tg->ref, 1);
-
-	/* Add group onto cgroup list */
-	sscanf(dev_name(bdi->dev), "%u:%u", &major, &minor);
-	blkiocg_add_blkio_group(blkcg, &tg->blkg, (void *)td,
-				MKDEV(major, minor), BLKIO_POLICY_THROTL);
-
-	tg->bps[READ] = blkcg_get_read_bps(blkcg, tg->blkg.dev);
-	tg->bps[WRITE] = blkcg_get_write_bps(blkcg, tg->blkg.dev);
-	tg->iops[READ] = blkcg_get_read_iops(blkcg, tg->blkg.dev);
-	tg->iops[WRITE] = blkcg_get_write_iops(blkcg, tg->blkg.dev);
-
-	hlist_add_head(&tg->tg_node, &td->tg_list);
-	td->nr_undestroyed_grps++;
-done:
+	__throtl_tg_fill_dev_details(td, tg);
 	return tg;
 }
 
+/*
+ * This function returns with queue lock unlocked in case of error, like
+ * request queue is no more
+ */
 static struct throtl_grp * throtl_get_tg(struct throtl_data *td)
 {
 	struct throtl_grp *tg = NULL, *__tg = NULL;
 	struct blkio_cgroup *blkcg;
 	struct request_queue *q = td->queue;
-
-	/* no throttling for dead queue */
-	if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags)))
-		return NULL;
 
 	rcu_read_lock();
 	blkcg = task_blkio_cgroup(current);
@@ -311,15 +333,21 @@ static struct throtl_grp * throtl_get_tg(struct throtl_data *td)
 	spin_unlock_irq(q->queue_lock);
 
 	tg = throtl_alloc_tg(td);
+	/*
+	 * We might have slept in group allocation. Make sure queue is not
+	 * dead
+	 */
+	if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags))) {
+		blk_put_queue(q);
+		if (tg)
+			kfree(tg);
+
+		return ERR_PTR(-ENODEV);
+	}
+	blk_put_queue(q);
 
 	/* Group allocated and queue is still alive. take the lock */
 	spin_lock_irq(q->queue_lock);
-
-	/* Make sure @q is still alive */
-	if (unlikely(test_bit(QUEUE_FLAG_DEAD, &q->queue_flags))) {
-		kfree(tg);
-		return NULL;
-	}
 
 	/*
 	 * Initialize the new group. After sleeping, read the blkcg again.
@@ -341,7 +369,7 @@ static struct throtl_grp * throtl_get_tg(struct throtl_data *td)
 
 	/* Group allocation failed. Account the IO to root group */
 	if (!tg) {
-		tg = &td->root_tg;
+		tg = td->root_tg;
 		return tg;
 	}
 
@@ -654,6 +682,12 @@ static bool tg_with_in_bps_limit(struct throtl_data *td, struct throtl_grp *tg,
 	return 0;
 }
 
+static bool tg_no_rule_group(struct throtl_grp *tg, bool rw) {
+	if (tg->bps[rw] == -1 && tg->iops[rw] == -1)
+		return 1;
+	return 0;
+}
+
 /*
  * Returns whether one can dispatch a bio or not. Also returns approx number
  * of jiffies to wait before this bio is with-in IO rate and can be dispatched
@@ -712,16 +746,12 @@ static bool tg_may_dispatch(struct throtl_data *td, struct throtl_grp *tg,
 static void throtl_charge_bio(struct throtl_grp *tg, struct bio *bio)
 {
 	bool rw = bio_data_dir(bio);
-	bool sync = bio->bi_rw & REQ_SYNC;
+	bool sync = rw_is_sync(bio->bi_rw);
 
 	/* Charge the bio to the group */
 	tg->bytes_disp[rw] += bio->bi_size;
 	tg->io_disp[rw]++;
 
-	/*
-	 * TODO: This will take blkg->stats_lock. Figure out a way
-	 * to avoid this cost.
-	 */
 	blkiocg_update_dispatch_stats(&tg->blkg, bio->bi_size, rw, sync);
 }
 
@@ -897,7 +927,7 @@ static int throtl_dispatch(struct request_queue *q)
 
 	bio_list_init(&bio_list_on_stack);
 
-	throtl_log(td, "dispatch nr_queued=%lu read=%u write=%u",
+	throtl_log(td, "dispatch nr_queued=%u read=%u write=%u",
 			total_nr_queued(td), td->nr_queued[READ],
 			td->nr_queued[WRITE]);
 
@@ -940,7 +970,7 @@ throtl_schedule_delayed_work(struct throtl_data *td, unsigned long delay)
 	struct delayed_work *dwork = &td->throtl_work;
 
 	/* schedule work if limits changed even if no bio is queued */
-	if (total_nr_queued(td) > 0 || td->limits_changed) {
+	if (total_nr_queued(td) || td->limits_changed) {
 		/*
 		 * We might have a work scheduled to be executed in future.
 		 * Cancel that and schedule a new one.
@@ -982,6 +1012,11 @@ static void throtl_release_tgs(struct throtl_data *td)
 		if (!blkiocg_del_blkio_group(&tg->blkg))
 			throtl_destroy_tg(td, tg);
 	}
+}
+
+static void throtl_td_free(struct throtl_data *td)
+{
+	kfree(td);
 }
 
 /*
@@ -1088,17 +1123,17 @@ static struct blkio_policy_type blkio_policy_throtl = {
 	.plid = BLKIO_POLICY_THROTL,
 };
 
-bool blk_throtl_bio(struct request_queue *q, struct bio *bio)
+int blk_throtl_bio(struct request_queue *q, struct bio **biop)
 {
 	struct throtl_data *td = q->td;
 	struct throtl_grp *tg;
+	struct bio *bio = *biop;
 	bool rw = bio_data_dir(bio), update_disptime = true;
 	struct blkio_cgroup *blkcg;
-	bool throttled = false;
 
 	if (bio->bi_rw & REQ_THROTTLED) {
 		bio->bi_rw &= ~REQ_THROTTLED;
-		goto out;
+		return 0;
 	}
 
 	/*
@@ -1117,7 +1152,7 @@ bool blk_throtl_bio(struct request_queue *q, struct bio *bio)
 			blkiocg_update_dispatch_stats(&tg->blkg, bio->bi_size,
 					rw, rw_is_sync(bio->bi_rw));
 			rcu_read_unlock();
-			goto out;
+			return 0;
 		}
 	}
 	rcu_read_unlock();
@@ -1126,10 +1161,18 @@ bool blk_throtl_bio(struct request_queue *q, struct bio *bio)
 	 * Either group has not been allocated yet or it is not an unlimited
 	 * IO group
 	 */
+
 	spin_lock_irq(q->queue_lock);
 	tg = throtl_get_tg(td);
-	if (unlikely(!tg))
-		goto out_unlock;
+
+	if (IS_ERR(tg)) {
+		if (PTR_ERR(tg)	== -ENODEV) {
+			/*
+			 * Queue is gone. No queue lock held here.
+			 */
+			return -ENODEV;
+		}
+	}
 
 	if (tg->nr_queued[rw]) {
 		/*
@@ -1157,11 +1200,11 @@ bool blk_throtl_bio(struct request_queue *q, struct bio *bio)
 		 * So keep on trimming slice even if bio is not queued.
 		 */
 		throtl_trim_slice(td, tg, rw);
-		goto out_unlock;
+		goto out;
 	}
 
 queue_bio:
-	throtl_log_tg(td, tg, "[%c] bio. bdisp=%u sz=%u bps=%llu"
+	throtl_log_tg(td, tg, "[%c] bio. bdisp=%llu sz=%u bps=%llu"
 			" iodisp=%u iops=%u queued=%d/%d",
 			rw == READ ? 'R' : 'W',
 			tg->bytes_disp[rw], bio->bi_size, tg->bps[rw],
@@ -1169,52 +1212,16 @@ queue_bio:
 			tg->nr_queued[READ], tg->nr_queued[WRITE]);
 
 	throtl_add_bio_tg(q->td, tg, bio);
-	throttled = true;
+	*biop = NULL;
 
 	if (update_disptime) {
 		tg_update_disptime(td, tg);
 		throtl_schedule_next_dispatch(td);
 	}
 
-out_unlock:
-	spin_unlock_irq(q->queue_lock);
 out:
-	return throttled;
-}
-
-/**
- * blk_throtl_drain - drain throttled bios
- * @q: request_queue to drain throttled bios for
- *
- * Dispatch all currently throttled bios on @q through ->make_request_fn().
- */
-void blk_throtl_drain(struct request_queue *q)
-	__releases(q->queue_lock) __acquires(q->queue_lock)
-{
-	struct throtl_data *td = q->td;
-	struct throtl_rb_root *st = &td->tg_service_tree;
-	struct throtl_grp *tg;
-	struct bio_list bl;
-	struct bio *bio;
-
-	lockdep_is_held(q->queue_lock);
-
-	bio_list_init(&bl);
-
-	while ((tg = throtl_rb_first(st))) {
-		throtl_dequeue_tg(td, tg);
-
-		while ((bio = bio_list_peek(&tg->bio_lists[READ])))
-			tg_dispatch_one_bio(td, tg, bio_data_dir(bio), &bl);
-		while ((bio = bio_list_peek(&tg->bio_lists[WRITE])))
-			tg_dispatch_one_bio(td, tg, bio_data_dir(bio), &bl);
-	}
 	spin_unlock_irq(q->queue_lock);
-
-	while ((bio = bio_list_pop(&bl)))
-		generic_make_request(bio);
-
-	spin_lock_irq(q->queue_lock);
+	return 0;
 }
 
 int blk_throtl_init(struct request_queue *q)
@@ -1229,39 +1236,24 @@ int blk_throtl_init(struct request_queue *q)
 	INIT_HLIST_HEAD(&td->tg_list);
 	td->tg_service_tree = THROTL_RB_ROOT;
 	td->limits_changed = false;
-
-	/* Init root group */
-	tg = &td->root_tg;
-	INIT_HLIST_NODE(&tg->tg_node);
-	RB_CLEAR_NODE(&tg->rb_node);
-	bio_list_init(&tg->bio_lists[0]);
-	bio_list_init(&tg->bio_lists[1]);
-
-	/* Practically unlimited BW */
-	tg->bps[0] = tg->bps[1] = -1;
-	tg->iops[0] = tg->iops[1] = -1;
-	td->limits_changed = false;
-
-	/*
-	 * Set root group reference to 2. One reference will be dropped when
-	 * all groups on tg_list are being deleted during queue exit. Other
-	 * reference will remain there as we don't want to delete this group
-	 * as it is statically allocated and gets destroyed when throtl_data
-	 * goes away.
-	 */
-	atomic_set(&tg->ref, 2);
-	hlist_add_head(&tg->tg_node, &td->tg_list);
-	td->nr_undestroyed_grps++;
-
 	INIT_DELAYED_WORK(&td->throtl_work, blk_throtl_work);
 
+	/* alloc and Init root group. */
+	td->queue = q;
+	tg = throtl_alloc_tg(td);
+
+	if (!tg) {
+		kfree(td);
+		return -ENOMEM;
+	}
+
+	td->root_tg = tg;
+
 	rcu_read_lock();
-	blkiocg_add_blkio_group(&blkio_root_cgroup, &tg->blkg, (void *)td,
-					0, BLKIO_POLICY_THROTL);
+	throtl_init_add_tg_lists(td, tg, &blkio_root_cgroup);
 	rcu_read_unlock();
 
 	/* Attach throtl data to request queue */
-	td->queue = q;
 	q->td = td;
 	return 0;
 }
@@ -1304,11 +1296,7 @@ void blk_throtl_exit(struct request_queue *q)
 	 * it.
 	 */
 	throtl_shutdown_wq(q);
-}
-
-void blk_throtl_release(struct request_queue *q)
-{
-	kfree(q->td);
+	throtl_td_free(td);
 }
 
 static int __init throtl_init(void)

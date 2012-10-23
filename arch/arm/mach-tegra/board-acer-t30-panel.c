@@ -8,7 +8,7 @@
 #include <linux/pwm_backlight.h>
 #include <asm/atomic.h>
 #include <linux/nvhost.h>
-#include <mach/nvmap.h>
+#include <linux/nvmap.h>
 #include <mach/irqs.h>
 #include <mach/iomap.h>
 #include <mach/dc.h>
@@ -18,6 +18,7 @@
 #include "board-acer-t30.h"
 #include "devices.h"
 #include "gpio-names.h"
+#include "tegra3_host1x_devices.h"
 
 #define LVDS_SHUTDOWN      TEGRA_GPIO_PC6    /* (AN25/LCD_PWR2/LVDS_SHTD)     */
 #define LCD_VDD            TEGRA_GPIO_PB1    /* (N9/GMI_A18/EN_VDDLCD_T30S)   */
@@ -72,8 +73,18 @@ static int acer_backlight_notify(struct device *unused, int brightness)
 	if (ori_brightness != !!brightness) {
 		if (!ori_brightness){
 			cancel_delayed_work_sync(&bl_en_gpio);
+#if defined(CONFIG_MACH_PICASSO_E2)
+			schedule_delayed_work(&bl_en_gpio,msecs_to_jiffies(150));
+#else
 			schedule_delayed_work(&bl_en_gpio,msecs_to_jiffies(220));
+#endif
 		}
+#if defined(CONFIG_MACH_PICASSO_E2)
+		if (ori_brightness){
+			cancel_delayed_work_sync(&bl_en_gpio);
+			gpio_set_value(BL_ENABLE, 0);
+		}
+#endif
 	}
 
 	ori_brightness = !!brightness;
@@ -121,6 +132,10 @@ static int acer_panel_enable(void)
 
 static int acer_panel_disable(void)
 {
+#if defined(CONFIG_MACH_PICASSO_MF)
+	gpio_set_value(BL_ENABLE, 0);
+	msleep(210);
+#endif
 	gpio_set_value(LCD_VDD, 0);
 	udelay(160);
 	gpio_set_value(LVDS_SHUTDOWN, 0);
@@ -232,6 +247,7 @@ static struct tegra_dc_sd_settings acer_sd_settings = {
 	.hw_update_delay = 0,
 	.bin_width = -1,
 	.aggressiveness = 1,
+	.phase_in_adjustments = true,
 	.use_vid_luma = true,
 	/* Default video coefficients */
 	.coeff = {5, 9, 2},
@@ -315,6 +331,10 @@ static struct tegra_dc_sd_settings acer_sd_settings = {
 		},
 	.sd_brightness = &sd_brightness,
 	.bl_device = &acer_backlight_device,
+#if defined(CONFIG_ACER_DIDIM_RULE)
+	.aggress_list = {1, 3},
+	.scenario = 0,
+#endif
 };
 /* DISPLAY PICASSO 2 */
 static struct tegra_dc_mode acer_p2_panel_modes[] = {
@@ -543,7 +563,6 @@ static struct platform_device acer_nvmap_device = {
 
 static struct platform_device *acer_gfx_devices[] __initdata = {
 	&acer_nvmap_device,
-	&tegra_grhost_device,
 	&tegra_pwfm0_device,
 	&acer_backlight_device,
 };
@@ -622,6 +641,12 @@ int __init acer_panel_init(void)
 	acer_panel_early_suspender.resume = acer_panel_late_resume;
 	acer_panel_early_suspender.level = EARLY_SUSPEND_LEVEL_DISABLE_FB;
 	register_early_suspend(&acer_panel_early_suspender);
+#endif
+
+#ifdef CONFIG_TEGRA_GRHOST
+	err = tegra3_register_host1x_devices();
+	if (err)
+		return err;
 #endif
 
 	err = platform_add_devices(acer_gfx_devices,

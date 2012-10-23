@@ -42,6 +42,8 @@
 #define BOARD_PMU_PM299   0x0263
 
 /* SKU Information */
+#define BOARD_SKU_B11	0xb11
+
 #define SKU_DCDC_TPS62361_SUPPORT	0x1
 #define SKU_SLT_ULPI_SUPPORT		0x2
 #define SKU_T30S_SUPPORT		0x4
@@ -50,16 +52,21 @@
 #define SKU_TOUCH_MASK			0xFF00
 #define SKU_TOUCH_2000			0x0B00
 
-#define SKU_MEMORY_TYPE_BIT		0x4
-#define SKU_MEMORY_TYPE_MASK		0x3
+#define SKU_MEMORY_TYPE_BIT		0x3
+#define SKU_MEMORY_TYPE_MASK		0x7
 /* If BOARD_PM269 */
 #define SKU_MEMORY_SAMSUNG_EC		0x0
-#define SKU_MEMORY_ELPIDA		0x1
-#define SKU_MEMORY_SAMSUNG_EB		0x2
+#define SKU_MEMORY_ELPIDA		0x2
+#define SKU_MEMORY_SAMSUNG_EB		0x4
+/* If BOARD_PM272 */
+#define SKU_MEMORY_1GB_1R_HYNIX		0x0
+#define SKU_MEMORY_2GB_2R_HYH9		0x2
 /* If other BOARD_ variants */
 #define SKU_MEMORY_CARDHU_1GB_1R	0x0
-#define SKU_MEMORY_CARDHU_2GB_2R	0x1
-#define SKU_MEMORY_CARDHU_2GB_1R	0x2
+#define SKU_MEMORY_CARDHU_2GB_2R	0x2
+#define SKU_MEMORY_CARDHU_2GB_1R_HYK0	0x4
+#define SKU_MEMORY_CARDHU_2GB_1R_HYH9	0x6
+#define SKU_MEMORY_CARDHU_2GB_1R_HYNIX	0x1
 #define MEMORY_TYPE(sku) (((sku) >> SKU_MEMORY_TYPE_BIT) & SKU_MEMORY_TYPE_MASK)
 
 /* Board Fab version */
@@ -69,10 +76,8 @@
 #define BOARD_FAB_A03			0x3
 #define BOARD_FAB_A04			0x4
 #define BOARD_FAB_A05			0x5
-
-/* Display Board ID */
-#define BOARD_DISPLAY_PM313		0x030D
-#define BOARD_DISPLAY_E1247		0x0C2F
+#define BOARD_FAB_A06			0x6
+#define BOARD_FAB_A07			0x7
 
 /* External peripheral act as gpio */
 /* TPS6591x GPIOs */
@@ -88,61 +93,8 @@
 #define TPS6591X_GPIO_8		(TPS6591X_GPIO_BASE + TPS6591X_GPIO_GP8)
 #define TPS6591X_GPIO_END	(TPS6591X_GPIO_BASE + TPS6591X_GPIO_NR)
 
-/* RICOH583 GPIO */
-#define RICOH583_GPIO_BASE	TEGRA_NR_GPIOS
-#define RICOH583_GPIO_END	(RICOH583_GPIO_BASE + 8)
-
-/* MAX77663 GPIO */
-#define MAX77663_GPIO_BASE	TEGRA_NR_GPIOS
-#define MAX77663_GPIO_END	(MAX77663_GPIO_BASE + MAX77663_GPIO_NR)
-
-/* PMU_TCA6416 GPIOs */
-#define PMU_TCA6416_GPIO_BASE	(TPS6591X_GPIO_END)
-#define PMU_TCA6416_GPIO_PORT00	(PMU_TCA6416_GPIO_BASE + 0)
-#define PMU_TCA6416_GPIO_PORT01	(PMU_TCA6416_GPIO_BASE + 1)
-#define PMU_TCA6416_GPIO_PORT02	(PMU_TCA6416_GPIO_BASE + 2)
-#define PMU_TCA6416_GPIO_PORT03	(PMU_TCA6416_GPIO_BASE + 3)
-#define PMU_TCA6416_GPIO_PORT04	(PMU_TCA6416_GPIO_BASE + 4)
-#define PMU_TCA6416_GPIO_PORT05	(PMU_TCA6416_GPIO_BASE + 5)
-#define PMU_TCA6416_GPIO_PORT06	(PMU_TCA6416_GPIO_BASE + 6)
-#define PMU_TCA6416_GPIO_PORT07	(PMU_TCA6416_GPIO_BASE + 7)
-#define PMU_TCA6416_GPIO_PORT10	(PMU_TCA6416_GPIO_BASE + 8)
-#define PMU_TCA6416_GPIO_PORT11	(PMU_TCA6416_GPIO_BASE + 9)
-#define PMU_TCA6416_GPIO_PORT12	(PMU_TCA6416_GPIO_BASE + 10)
-#define PMU_TCA6416_GPIO_PORT13	(PMU_TCA6416_GPIO_BASE + 11)
-#define PMU_TCA6416_GPIO_PORT14	(PMU_TCA6416_GPIO_BASE + 12)
-#define PMU_TCA6416_GPIO_PORT15	(PMU_TCA6416_GPIO_BASE + 13)
-#define PMU_TCA6416_GPIO_PORT16	(PMU_TCA6416_GPIO_BASE + 14)
-#define PMU_TCA6416_GPIO_PORT17	(PMU_TCA6416_GPIO_BASE + 15)
-#define PMU_TCA6416_GPIO_END	(PMU_TCA6416_GPIO_BASE + 16)
-
-/* PMU_TCA6416 GPIO assignment */
-#define EN_HSIC_GPIO				PMU_TCA6416_GPIO_PORT11 /* PMU_GPIO25 */
-#define PM267_SMSC4640_HSIC_HUB_RESET_GPIO	PMU_TCA6416_GPIO_PORT17 /* PMU_GPIO31 */
-
-/* CAM_TCA6416 GPIOs */
-#define CAM_TCA6416_GPIO_BASE		PMU_TCA6416_GPIO_END
-#define CAM1_PWR_DN_GPIO			CAM_TCA6416_GPIO_BASE + 0
-#define CAM1_RST_L_GPIO				CAM_TCA6416_GPIO_BASE + 1
-#define CAM1_AF_PWR_DN_L_GPIO		CAM_TCA6416_GPIO_BASE + 2
-#define CAM1_LDO_SHUTDN_L_GPIO		CAM_TCA6416_GPIO_BASE + 3
-#define CAM2_PWR_DN_GPIO			CAM_TCA6416_GPIO_BASE + 4
-#define CAM2_RST_L_GPIO				CAM_TCA6416_GPIO_BASE + 5
-#define CAM2_AF_PWR_DN_L_GPIO		CAM_TCA6416_GPIO_BASE + 6
-#define CAM2_LDO_SHUTDN_L_GPIO		CAM_TCA6416_GPIO_BASE + 7
-#define CAM_FRONT_PWR_DN_GPIO		CAM_TCA6416_GPIO_BASE + 8
-#define CAM_FRONT_RST_L_GPIO		CAM_TCA6416_GPIO_BASE + 9
-#define CAM_FRONT_AF_PWR_DN_L_GPIO	CAM_TCA6416_GPIO_BASE + 10
-#define CAM_FRONT_LDO_SHUTDN_L_GPIO	CAM_TCA6416_GPIO_BASE + 11
-#define CAM_FRONT_LED_EXP			CAM_TCA6416_GPIO_BASE + 12
-#define CAM_SNN_LED_REAR_EXP		CAM_TCA6416_GPIO_BASE + 13
-/* PIN 19 NOT USED and is reserved */
-#define CAM_NOT_USED				CAM_TCA6416_GPIO_BASE + 14
-#define CAM_I2C_MUX_RST_EXP			CAM_TCA6416_GPIO_BASE + 15
-#define CAM_TCA6416_GPIO_END		CAM_TCA6416_GPIO_BASE + 16
-
 /* WM8903 GPIOs */
-#define CARDHU_GPIO_WM8903(_x_)		(CAM_TCA6416_GPIO_END + (_x_))
+#define CARDHU_GPIO_WM8903(_x_)		(TPS6591X_GPIO_END + (_x_))
 #define CARDHU_GPIO_WM8903_END		CARDHU_GPIO_WM8903(4)
 
 /* Audio-related GPIOs */
@@ -153,9 +105,12 @@
 #define TEGRA_GPIO_DEBUG_SWITCH_EN	TEGRA_GPIO_PR5
 
 /* Sensor GPIOs*/
-#define SENSOR_3V3              TEGRA_GPIO_PH7
-#define SENSOR_3V3_2            TEGRA_GPIO_PP3
-#define EN_SENSOR_VLOGIC        TEGRA_GPIO_PY3
+#define SENSOR_3V3			TEGRA_GPIO_PH7
+#define SENSOR_3V3_2			TEGRA_GPIO_PP3
+#define EN_SENSOR_VLOGIC		TEGRA_GPIO_PY3
+#define GYRO_INT_R			TEGRA_GPIO_PX1
+#define G_ACC_INT			TEGRA_GPIO_PS5
+#define COMPASS_DRDY			TEGRA_GPIO_PX7
 
 /* CAMERA RELATED GPIOs on CARDHU */
 #define OV5650_RESETN_GPIO			TEGRA_GPIO_PBB0
@@ -173,13 +128,6 @@
 #define CAMERA_FLASH_MAX_TORCH_AMP	7
 #define CAMERA_FLASH_MAX_FLASH_AMP	7
 
-/* PCA954x I2C bus expander bus addresses */
-#define PCA954x_I2C_BUS_BASE	6
-#define PCA954x_I2C_BUS0	(PCA954x_I2C_BUS_BASE + 0)
-#define PCA954x_I2C_BUS1	(PCA954x_I2C_BUS_BASE + 1)
-#define PCA954x_I2C_BUS2	(PCA954x_I2C_BUS_BASE + 2)
-#define PCA954x_I2C_BUS3	(PCA954x_I2C_BUS_BASE + 3)
-
 #define AC_PRESENT_GPIO		TPS6591X_GPIO_4
 
 /*****************Interrupt tables ******************/
@@ -187,6 +135,7 @@
 /* TPS6591x IRQs */
 #define TPS6591X_IRQ_BASE	TEGRA_NR_IRQS
 #define TPS6591X_IRQ_END	(TPS6591X_IRQ_BASE + 18)
+#define DOCK_DETECT_GPIO TEGRA_GPIO_PU4
 
 /* RICOH583 IRQs */
 #define RICOH583_IRQ_BASE	TEGRA_NR_IRQS
@@ -200,21 +149,25 @@ int cardhu_charge_init(void);
 int cardhu_regulator_init(void);
 int cardhu_suspend_init(void);
 int cardhu_sdhci_init(void);
-int acer_t30_pinmux_init(void);
+int cardhu_pinmux_init(void);
 int acer_panel_init(void);
 int cardhu_sensors_init(void);
+int cardhu_kbc_init(void);
 int cardhu_scroll_init(void);
 int cardhu_keys_init(void);
-int cardhu_gpio_switch_regulator_init(void);
 int cardhu_pins_state_init(void);
 int cardhu_emc_init(void);
-int cardhu_power_off_init(void);
 int cardhu_edp_init(void);
-void __init cardhu_tsensor_init(void);
 int acer_keys_init(void);
+int cardhu_pmon_init(void);
+int cardhu_pm298_gpio_switch_regulator_init(void);
+int cardhu_pm298_regulator_init(void);
+int cardhu_pm299_gpio_switch_regulator_init(void);
+int cardhu_pm299_regulator_init(void);
 
-/* Invensense MPU Definitions */
-#define MPU_GYRO_NAME		"mpu3050"
+#define MPU_TYPE_MPU3050	1
+#define MPU_TYPE_MPU6050	2
+#define MPU_GYRO_TYPE		MPU_TYPE_MPU3050
 #define MPU_GYRO_IRQ_GPIO	TEGRA_GPIO_PX1
 #define MPU_GYRO_ADDR		0x68
 #define MPU_GYRO_BUS_NUM	2

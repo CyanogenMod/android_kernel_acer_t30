@@ -382,7 +382,8 @@ static void wm8903_seq_notifier(struct snd_soc_dapm_context *dapm,
 static int wm8903_class_w_put(struct snd_kcontrol *kcontrol,
 			      struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_dapm_widget *widget = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_dapm_widget_list *wlist = snd_kcontrol_chip(kcontrol);
+	struct snd_soc_dapm_widget *widget = wlist->widgets[0];
 	struct snd_soc_codec *codec = widget->codec;
 	struct wm8903_priv *wm8903 = snd_soc_codec_get_drvdata(codec);
 	u16 reg;
@@ -951,7 +952,7 @@ SND_SOC_DAPM_SUPPLY("CLK_DSP", WM8903_CLOCK_RATES_2, 1, 0, NULL, 0),
 SND_SOC_DAPM_SUPPLY("CLK_SYS", WM8903_CLOCK_RATES_2, 2, 0, NULL, 0),
 };
 
-static const struct snd_soc_dapm_route intercon[] = {
+static const struct snd_soc_dapm_route wm8903_intercon[] = {
 
 	{ "CLK_DSP", NULL, "CLK_SYS" },
 	{ "Mic Bias", NULL, "CLK_SYS" },
@@ -1112,17 +1113,6 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{ "Left Line Output PGA", NULL, "Charge Pump" },
 	{ "Right Line Output PGA", NULL, "Charge Pump" },
 };
-
-static int wm8903_add_widgets(struct snd_soc_codec *codec)
-{
-	struct snd_soc_dapm_context *dapm = &codec->dapm;
-
-	snd_soc_dapm_new_controls(dapm, wm8903_dapm_widgets,
-				  ARRAY_SIZE(wm8903_dapm_widgets));
-	snd_soc_dapm_add_routes(dapm, intercon, ARRAY_SIZE(intercon));
-
-	return 0;
-}
 
 static int wm8903_set_bias_level(struct snd_soc_codec *codec,
 				 enum snd_soc_bias_level level)
@@ -1421,6 +1411,7 @@ static struct {
 	{ 1500, 0x9, 0x2, 2 },
 };
 
+#ifdef SYS_BCLK_RATIO
 /* CLK_SYS/BCLK ratios - multiplied by 10 due to .5s */
 static struct {
 	int ratio;
@@ -1444,6 +1435,7 @@ static struct {
 	{ 440, 19 },
 	{ 480, 20 },
 };
+#endif
 
 /* Sample rates for DSP */
 static struct {
@@ -1795,9 +1787,6 @@ static int wm8903_resume(struct snd_soc_codec *codec)
 	if (wm8903->irq)
 		enable_irq(wm8903->irq);
 
-	/* Bring the codec back up to standby first to minimise pop/clicks */
-	wm8903_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
-
 	/* Sync back everything else */
 	if (tmp_cache) {
 		for (i = 2; i < ARRAY_SIZE(wm8903_reg_defaults); i++)
@@ -1807,6 +1796,9 @@ static int wm8903_resume(struct snd_soc_codec *codec)
 	} else {
 		dev_err(codec->dev, "Failed to allocate temporary cache\n");
 	}
+
+	/* Bring the codec back up to standby first to minimise pop/clicks */
+	wm8903_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	return 0;
 }
@@ -2059,7 +2051,6 @@ static int wm8903_probe(struct snd_soc_codec *codec)
 
 	snd_soc_add_controls(codec, wm8903_snd_controls,
 				ARRAY_SIZE(wm8903_snd_controls));
-	wm8903_add_widgets(codec);
 
 	wm8903_init_gpio(codec);
 
@@ -2069,8 +2060,13 @@ static int wm8903_probe(struct snd_soc_codec *codec)
 /* power down chip */
 static int wm8903_remove(struct snd_soc_codec *codec)
 {
+	struct wm8903_priv *wm8903 = snd_soc_codec_get_drvdata(codec);
+
 	wm8903_free_gpio(codec);
 	wm8903_set_bias_level(codec, SND_SOC_BIAS_OFF);
+	if (wm8903->irq)
+		free_irq(wm8903->irq, codec);
+
 	return 0;
 }
 
@@ -2085,6 +2081,10 @@ static struct snd_soc_codec_driver soc_codec_dev_wm8903 = {
 	.reg_cache_default = wm8903_reg_defaults,
 	.volatile_register = wm8903_volatile_register,
 	.seq_notifier = wm8903_seq_notifier,
+	.dapm_widgets = wm8903_dapm_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(wm8903_dapm_widgets),
+	.dapm_routes = wm8903_intercon,
+	.num_dapm_routes = ARRAY_SIZE(wm8903_intercon),
 };
 
 #if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)

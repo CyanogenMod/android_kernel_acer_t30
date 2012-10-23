@@ -270,7 +270,7 @@ void set_ext_mic_state(bool state)
 	audio_data.state.ext_mic = state;
 }
 
-static void fm2018_switch(struct tegra_wm8903_platform_data *pdata)
+static void fm2018_switch(struct tegra_asoc_platform_data *pdata)
 {
 	if (!audio_data.state.int_mic && !audio_data.state.ext_mic)
 		gpio_set_value_cansleep(pdata->gpio_int_mic_en, 0);
@@ -280,7 +280,7 @@ static void fm2018_switch(struct tegra_wm8903_platform_data *pdata)
 	ACER_DBG("FM2018_EN = %d", gpio_get_value_cansleep(audio_data.gpio.int_mic_en));
 }
 
-void mic_switch(struct tegra_wm8903_platform_data *pdata)
+void mic_switch(struct tegra_asoc_platform_data *pdata)
 {
 	switch_audio_table(audio_data.mode.control, false);
 	fm2018_switch(pdata);

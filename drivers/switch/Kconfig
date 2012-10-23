@@ -18,15 +18,6 @@ config ROTATELOCK
 	tristate "RotationLock Switch support"
 	default n
 
-config DOCK_V2
-	tristate "Acer Dock 2 support"
-	depends on (MACH_PICASSO2) || (MACH_PICASSO_M)
-	default n
-
-config PSENSOR3G
-	tristate "P-Sensor Switch support for 3G"
-	default n
-
 config SIMDETECT
 	tristate "SIM Hot-swap detection support"
 	default n

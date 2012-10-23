@@ -28,10 +28,10 @@
 #define HSM_EN(reg)	(((reg) >> 2) & 0x1)
 #define SCHMT_EN(reg)	(((reg) >> 3) & 0x1)
 #define LPMD(reg)	(((reg) >> 4) & 0x3)
-#define DRVDN(reg)	(((reg) >> 12) & 0x1f)
-#define DRVUP(reg)	(((reg) >> 20) & 0x1f)
-#define SLWR(reg)	(((reg) >> 28) & 0x3)
-#define SLWF(reg)	(((reg) >> 30) & 0x3)
+#define DRVDN(reg, offset)	(((reg) >> offset) & 0x1f)
+#define DRVUP(reg, offset)	(((reg) >> offset) & 0x1f)
+#define SLWR(reg, offset)	(((reg) >> offset) & 0x3)
+#define SLWF(reg, offset)	(((reg) >> offset) & 0x3)
 
 static const struct tegra_pingroup_desc *const pingroups = tegra_soc_pingroups;
 static const struct tegra_drive_pingroup_desc *const drive_pingroups = tegra_soc_drive_pingroups;
@@ -341,56 +341,6 @@ int tegra_pinmux_set_io(enum tegra_pingroup pg,
 }
 EXPORT_SYMBOL_GPL(tegra_pinmux_set_io);
 
-#if defined(CONFIG_ARCH_ACER_T30)
-int tegra_pinmux_set_suspend_state(const struct tegra_pingroup_config *config)
-{
-	unsigned long reg;
-	unsigned long flags;
-	enum tegra_pingroup pg = config->pingroup;
-	enum tegra_pullupdown pupd  = config->pupd;
-	enum tegra_tristate tristate = config->tristate;
-	enum tegra_pin_io io = config->io;
-
-	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
-		return -EINVAL;
-
-	if (pingroups[pg].tri_reg <= 0)
-		return -EINVAL;
-
-	if (pupd != TEGRA_PUPD_NORMAL &&
-	    pupd != TEGRA_PUPD_PULL_DOWN &&
-	    pupd != TEGRA_PUPD_PULL_UP)
-		return -EINVAL;
-
-	spin_lock_irqsave(&mux_lock, flags);
-
-	// pull up/down
-	reg = pg_readl(pingroups[pg].pupd_reg);
-	reg &= ~(0x3 << pingroups[pg].pupd_bit);
-	reg |= pupd << pingroups[pg].pupd_bit;
-	pg_writel(reg, pingroups[pg].pupd_reg);
-
-	// tristate
-	reg = pg_readl(pingroups[pg].tri_reg);
-	reg &= ~(0x1 << pingroups[pg].tri_bit);
-	if (tristate)
-		reg |= 1 << pingroups[pg].tri_bit;
-	pg_writel(reg, pingroups[pg].tri_reg);
-
-	// io direction
-	reg = pg_readl(pingroups[pg].mux_reg);
-#if defined(TEGRA_PINMUX_HAS_IO_DIRECTION)
-	reg &= ~(0x1 << 5);
-	reg |= (io & 0x1) << 5;
-#endif
-	pg_writel(reg, pingroups[pg].mux_reg);
-
-	spin_unlock_irqrestore(&mux_lock, flags);
-
-	return 0;
-}
-#endif
-
 #if !defined(CONFIG_ARCH_TEGRA_2x_SOC)
 static int tegra_pinmux_set_lock(enum tegra_pingroup pg,
 	enum tegra_pin_lock lock)
@@ -508,6 +458,37 @@ int tegra_pinmux_set_pullupdown(enum tegra_pingroup pg,
 
 	return 0;
 }
+
+#if defined(CONFIG_ARCH_ACER_T30)
+int tegra_pinmux_set_e_input_bit(enum tegra_pingroup pg,
+	enum tegra_e_input e_input)
+{
+	unsigned long reg;
+	unsigned long flags;
+
+	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+		return -ERANGE;
+
+	if (pingroups[pg].pupd_reg <= 0)
+		return -EINVAL;
+
+	if (e_input != TEGRA_E_INPUT_DISABLE &&
+	    e_input != TEGRA_E_INPUT_ENABLE)
+		return -EINVAL;
+
+
+	spin_lock_irqsave(&mux_lock, flags);
+
+	reg = pg_readl(pingroups[pg].pupd_reg);
+	reg &= ~(0x1 << 5);
+	reg |= e_input << 5;
+	pg_writel(reg, pingroups[pg].pupd_reg);
+
+	spin_unlock_irqrestore(&mux_lock, flags);
+
+	return 0;
+}
+#endif
 
 static void tegra_pinmux_config_pingroup(const struct tegra_pingroup_config *config)
 {
@@ -1025,6 +1006,7 @@ static int dbg_drive_pinmux_show(struct seq_file *s, void *unused)
 {
 	int i;
 	int len;
+	u8 offset;
 
 	for (i = 0; i < TEGRA_MAX_DRIVE_PINGROUP; i++) {
 		u32 reg;
@@ -1058,19 +1040,23 @@ static int dbg_drive_pinmux_show(struct seq_file *s, void *unused)
 		len = strlen(drive_name(LPMD(reg)));
 		dbg_pad_field(s, 5 - len);
 
-		seq_printf(s, "TEGRA_PULL_%d", DRVDN(reg));
-		len = DRVDN(reg) < 10 ? 1 : 2;
+		offset = drive_pingroups[i].drvdown_offset;
+		seq_printf(s, "TEGRA_PULL_%d", DRVDN(reg, offset));
+		len = DRVDN(reg, offset) < 10 ? 1 : 2;
 		dbg_pad_field(s, 2 - len);
 
-		seq_printf(s, "TEGRA_PULL_%d", DRVUP(reg));
-		len = DRVUP(reg) < 10 ? 1 : 2;
+		offset = drive_pingroups[i].drvup_offset;
+		seq_printf(s, "TEGRA_PULL_%d", DRVUP(reg, offset));
+		len = DRVUP(reg, offset) < 10 ? 1 : 2;
 		dbg_pad_field(s, 2 - len);
 
-		seq_printf(s, "TEGRA_SLEW_%s", slew_name(SLWR(reg)));
-		len = strlen(slew_name(SLWR(reg)));
+		offset = drive_pingroups[i].slewrise_offset;
+		seq_printf(s, "TEGRA_SLEW_%s", slew_name(SLWR(reg, offset)));
+		len = strlen(slew_name(SLWR(reg, offset)));
 		dbg_pad_field(s, 7 - len);
 
-		seq_printf(s, "TEGRA_SLEW_%s", slew_name(SLWF(reg)));
+		offset= drive_pingroups[i].slewfall_offset;
+		seq_printf(s, "TEGRA_SLEW_%s", slew_name(SLWF(reg, offset)));
 
 		seq_printf(s, "},\n");
 	}

@@ -38,13 +38,13 @@
 #include <linux/stk_i2c_als_220xgeneric.h>
 #include "../../arch/arm/mach-tegra/board-acer-t30.h"
 #include <linux/i2c/at24.h>
+#include <mach/gpio.h>
+
 extern int acer_board_id;
 
 #define STK_DRIVER_VER	"1.6.2"
 #define ALS_NAME	"lightsensor-level"
 #define DEFAULT_ALS_TRANSMITTANCE	1000
-
-#include <mach/gpio.h>
 
 #define STKALS_DRV_NAME	"stk_als"
 #define DEVICE_NAME		"stk-oss"
@@ -66,7 +66,7 @@ static struct mutex stkals_io_lock;
 struct stkals_data* pStkAlsData = NULL;
 static struct workqueue_struct *stk_oss_work_queue = NULL;
 static int32_t als_transmittance = DEFAULT_ALS_TRANSMITTANCE;
-char buff[10];
+static char buff[LENGTH_L_SENSOR];
 
 inline void report_event(struct input_dev* dev,int32_t report_value)
 {
@@ -447,7 +447,6 @@ static int stk_als_probe(struct i2c_client *client,
 	err = set_power_state(0);
 	if (err < 0) {
 		ERR("%s: set_power_state error\n", __func__);
-		gpio_free(158);
 		mutex_destroy(&stkals_io_lock);
 		kfree(als_data);
 		pStkAlsData = NULL;
@@ -465,7 +464,6 @@ static int stk_als_probe(struct i2c_client *client,
 	if (pStkAlsData->input_dev==NULL) {
 		ERR("STK ALS : can not allocate als input device\n");
 		free_irq(client->irq, pStkAlsData);
-		gpio_free(158);
 		mutex_destroy(&stkals_io_lock);
 		kfree(pStkAlsData);
 		pStkAlsData = NULL;
@@ -478,7 +476,6 @@ static int stk_als_probe(struct i2c_client *client,
 	if (err<0) {
 		ERR("STK ALS : can not register als input device\n");
 		free_irq(client->irq, pStkAlsData);
-		gpio_free(158);
 		mutex_destroy(&stkals_io_lock);
 		input_free_device(pStkAlsData->input_dev);
 		kfree(pStkAlsData);

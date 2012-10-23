@@ -39,6 +39,9 @@
 #define DEVCTRL_DEV_ON		(1 << 2)
 #define DEVCTRL_DEV_SLP		(1 << 1)
 #define TPS6591X_DEVCTRL2	0x40
+#if defined(CONFIG_MACH_PICASSO_E2)
+#define DEVCTRL_DEV_OFF		(1 << 0)
+#endif
 
 /* device sleep on registers */
 #define TPS6591X_SLEEP_KEEP_ON	0x42
@@ -60,16 +63,17 @@
 /* GPIO register base address */
 #define TPS6591X_GPIO_BASE_ADDR	0x60
 
-#if defined(CONFIG_ARCH_ACER_T30)
-#define TPS6591X_VMBCH_REG	0x6A
-#endif
-
 /* silicon version number */
 #define TPS6591X_VERNUM		0x80
 
 #define TPS6591X_GPIO_SLEEP	7
 #define TPS6591X_GPIO_PDEN	3
 #define TPS6591X_GPIO_DIR	2
+#if defined(CONFIG_MACH_PICASSO_E2)
+#define TPS6591X_VDDCTRL_ADD	0x27
+#define TPS6591X_VDDCTRL_STATE_OFF	0x0
+#define TPS6591X_VDDCTRL_STATE_MASK	0x3
+#endif
 
 enum irq_type {
 	EVENT,
@@ -119,53 +123,11 @@ struct tps6591x {
 	struct irq_chip		irq_chip;
 	struct mutex		irq_lock;
 	int			irq_base;
+	int			irq_main;
 	u32			irq_en;
 	u8			mask_cache[3];
 	u8			mask_reg[3];
 };
-
-#if defined(CONFIG_MACH_PICASSO_E2)
-static struct kobject *pmic_dev_info_kobj;
-static int version_num;
-
-static ssize_t CHIP_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-	s += sprintf(s, "TPS6591x\n");
-	return (s - buf);
-}
-
-static ssize_t VERSION_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "version : 0%d\n", version_num);
-	return (s - buf);
-}
-
-#define debug_attr(_name, _mode) \
-	static struct kobj_attribute _name##_attr = { \
-	.attr = { \
-	.name = __stringify(_name), \
-	.mode = _mode, \
-	}, \
-	.show = _name##_show, \
-	}
-
-debug_attr(CHIP, 0644);
-debug_attr(VERSION, 0644);
-
-static struct attribute * group[] = {
-	&VERSION_attr.attr,
-	&CHIP_attr.attr,
-	NULL,
-};
-
-static struct attribute_group attr_group =
-{
-	.attrs = group,
-};
-#endif
 
 static inline int __tps6591x_read(struct i2c_client *client,
 				  int reg, uint8_t *val)
@@ -330,15 +292,17 @@ out:
 EXPORT_SYMBOL_GPL(tps6591x_update);
 
 static struct i2c_client *tps6591x_i2c_client;
-int tps6591x_power_off(void)
+static void tps6591x_power_off(void)
 {
 	struct device *dev = NULL;
 	int ret;
 
+#if defined(CONFIG_ARCH_ACER_T30)
 	printk("%s\n", __func__);
+#endif
 
 	if (!tps6591x_i2c_client)
-		return -EINVAL;
+		return;
 
 	dev = &tps6591x_i2c_client->dev;
 
@@ -350,17 +314,23 @@ int tps6591x_power_off(void)
 		dev_err(&tps6591x_i2c_client->dev, "Mask RTC ALARM interrupt failed %d.\n", ret);
 		return -EIO;
 	}
+
+	pr_info("%s(): Setting power off seq\n", __func__);
 #endif
+	if (tps6591x_set_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_PWR_OFF_SEQ) < 0)
+		return;
 
-	ret = tps6591x_set_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_PWR_OFF_SEQ);
-	if (ret < 0)
-		return ret;
+#if defined(CONFIG_MACH_PICASSO_E2)
+	pr_info("%s(): Clearing DEV_SLP\n", __func__);
+	if (tps6591x_clr_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_DEV_SLP) < 0)
+		return;
 
-	ret = tps6591x_clr_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_DEV_ON);
-	if (ret < 0)
-		return ret;
-
-	return 0;
+	pr_info("%s(): Setting device off and clearing dev-on\n", __func__);
+	if (tps6591x_update(dev, TPS6591X_DEVCTRL, DEVCTRL_DEV_OFF, DEVCTRL_DEV_OFF | DEVCTRL_DEV_ON) < 0)
+		return;
+#else
+	tps6591x_clr_bits(dev, TPS6591X_DEVCTRL, DEVCTRL_DEV_ON);
+#endif
 }
 
 static int tps6591x_gpio_get(struct gpio_chip *gc, unsigned offset)
@@ -574,6 +544,17 @@ static int tps6591x_irq_set_type(struct irq_data *irq_data, unsigned int type)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int tps6591x_irq_set_wake(struct irq_data *irq_data, unsigned int on)
+{
+	struct tps6591x *tps6591x = irq_data_get_irq_chip_data(irq_data);
+	return irq_set_irq_wake(tps6591x->irq_main, on);
+}
+#else
+#define tps6591x_irq_set_wake NULL
+#endif
+
+
 static irqreturn_t tps6591x_irq(int irq, void *data)
 {
 	struct tps6591x *tps6591x = data;
@@ -645,6 +626,7 @@ static int __devinit tps6591x_irq_init(struct tps6591x *tps6591x, int irq,
 		tps6591x_write(tps6591x->dev, TPS6591X_INT_STS + 2*i, 0xff);
 
 	tps6591x->irq_base = irq_base;
+	tps6591x->irq_main = irq;
 
 	tps6591x->irq_chip.name = "tps6591x";
 	tps6591x->irq_chip.irq_mask = tps6591x_irq_mask;
@@ -652,6 +634,7 @@ static int __devinit tps6591x_irq_init(struct tps6591x *tps6591x, int irq,
 	tps6591x->irq_chip.irq_bus_lock = tps6591x_irq_lock;
 	tps6591x->irq_chip.irq_bus_sync_unlock = tps6591x_irq_sync_unlock;
 	tps6591x->irq_chip.irq_set_type = tps6591x_irq_set_type;
+	tps6591x->irq_chip.irq_set_wake = tps6591x_irq_set_wake;
 
 	for (i = 0; i < ARRAY_SIZE(tps6591x_irqs); i++) {
 		int __irq = i + tps6591x->irq_base;
@@ -867,9 +850,6 @@ static int __devinit tps6591x_i2c_probe(struct i2c_client *client,
 		return -EIO;
 	}
 
-#if defined(CONFIG_MACH_PICASSO_E2)
-	version_num = ret;
-#endif
 	dev_info(&client->dev, "VERNUM is %02x\n", ret);
 
 #if defined(CONFIG_ARCH_ACER_T30)
@@ -902,25 +882,14 @@ static int __devinit tps6591x_i2c_probe(struct i2c_client *client,
 		goto err_add_devs;
 	}
 
-#if defined(CONFIG_MACH_PICASSO_E2)
-	pmic_dev_info_kobj = kobject_create_and_add("dev-info_pmic", NULL);
-	if (pmic_dev_info_kobj == NULL)
-	{
-		dev_err(&client->dev,"%s: subsystem_register failed\n", __FUNCTION__);
-	}
-	ret = sysfs_create_group(pmic_dev_info_kobj, &attr_group);
-
-	if(ret)
-	{
-		dev_err(&client->dev,"%s: sysfs_create_group failed, %d\n", __FUNCTION__, __LINE__);
-	}
-#endif
-
 	tps6591x_gpio_init(tps6591x, pdata);
 
 	tps6591x_debuginit(tps6591x);
 
 	tps6591x_sleepinit(tps6591x, pdata);
+
+	if (pdata->use_power_off && !pm_power_off)
+		pm_power_off = tps6591x_power_off;
 
 	tps6591x_i2c_client = client;
 
@@ -955,7 +924,6 @@ static int tps6591x_i2c_suspend(struct i2c_client *client, pm_message_t state)
 	return 0;
 }
 
-
 static int tps6591x_i2c_resume(struct i2c_client *client)
 {
 	if (client->irq)
@@ -963,6 +931,7 @@ static int tps6591x_i2c_resume(struct i2c_client *client)
 	return 0;
 }
 #endif
+
 
 static const struct i2c_device_id tps6591x_id_table[] = {
 	{ "tps6591x", 0 },

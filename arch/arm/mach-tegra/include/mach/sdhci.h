@@ -20,15 +20,21 @@
 #include <linux/mmc/host.h>
 #include <asm/mach/mmc.h>
 
+/*
+ * MMC_OCR_1V8_MASK will be used in board sdhci file
+ * Example for cardhu it will be used in board-cardhu-sdhci.c
+ * for built_in = 0 devices enabling ocr_mask to MMC_OCR_1V8_MASK
+ * sets the voltage to 1.8V
+ */
+#define MMC_OCR_1V8_MASK    0x8
+
 struct tegra_sdhci_platform_data {
 	int cd_gpio;
 	int wp_gpio;
 	int power_gpio;
 	int is_8bit;
-	unsigned int tap_delay;
-#if defined(CONFIG_ARCH_ACER_T20)
-	int cd_gpio_polarity;
-#endif
+	int pm_flags;
+	int pm_caps;
 #if defined(CONFIG_ARCH_ACER_T30)
 	bool is_voltage_switch_supported;
 	const char *vdd_rail_name;
@@ -37,6 +43,8 @@ struct tegra_sdhci_platform_data {
 	int vdd_min_uv;
 #endif
 	unsigned int max_clk_limit;
+	unsigned int ddr_clk_limit;
+	unsigned int tap_delay;
 	struct mmc_platform_data mmc_data;
 };
 

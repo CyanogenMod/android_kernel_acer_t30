@@ -272,7 +272,7 @@ static int ov9740_set_color_effect(struct ov9740_info *info, int color_effect)
 
 static int ov9740_set_exposure(struct ov9740_info *info, int exposure)
 {
-	int err;
+	int err = 0;
 
 	pr_info("%s: exposure = %d\n", __func__, exposure);
 
@@ -376,8 +376,8 @@ static int ov9740_initialize(struct ov9740_info *info)
 	u16 chip_id = 0;
 	struct tegra_camera_clk_info clk_info;
 
-	extern void extern_tegra_camera_enable_vi(void);
-	extern void extern_tegra_camera_disable_vi(void);
+	extern void extern_tegra_camera_enable_clk(void);
+	extern void extern_tegra_camera_disable_clk(void);
 	extern void extern_tegra_camera_clk_set_rate(struct tegra_camera_clk_info *);
 
 	pr_info("%s ++\n", __func__);
@@ -389,7 +389,7 @@ static int ov9740_initialize(struct ov9740_info *info)
 	extern_tegra_camera_clk_set_rate(&clk_info);
 
 	// turn on MCLK and pull down PWDN pin
-	extern_tegra_camera_enable_vi();
+	extern_tegra_camera_enable_clk();
 	if (info->pdata && info->pdata->power_on)
 		info->pdata->power_on();
 
@@ -414,7 +414,7 @@ static int ov9740_initialize(struct ov9740_info *info)
 	// pull high PWDN pin and turn off MCLK
 	if (info->pdata && info->pdata->power_off)
 		info->pdata->power_off();
-	extern_tegra_camera_disable_vi();
+	extern_tegra_camera_disable_clk();
 
 	pr_info("%s --\n", __func__);
 	return 0;

@@ -109,21 +109,17 @@ struct tps6586x {
 static inline int __tps6586x_read(struct i2c_client *client,
 				  int reg, uint8_t *val)
 {
-	int ret, i;
-	int retry = 10;
+	int ret;
 
-	for (i = 0; i < retry; i++) {
-		ret = i2c_smbus_read_byte_data(client, reg);
-		if (ret < 0) {
-			dev_err(&client->dev, "failed reading at 0x%02x, retry = %d\n", reg, i + 1);
-			continue;
-		} else {
-			*val = (uint8_t)ret;
-			return 0;
-		}
+	ret = i2c_smbus_read_byte_data(client, reg);
+	if (ret < 0) {
+		dev_err(&client->dev, "failed reading at 0x%02x\n", reg);
+		return ret;
 	}
 
-	return ret;
+	*val = (uint8_t)ret;
+
+	return 0;
 }
 
 static inline int __tps6586x_reads(struct i2c_client *client, int reg,
@@ -260,25 +256,19 @@ out:
 EXPORT_SYMBOL_GPL(tps6586x_update);
 
 static struct i2c_client *tps6586x_i2c_client = NULL;
-int tps6586x_power_off(void)
+static void tps6586x_power_off(void)
 {
 	struct device *dev = NULL;
-	int ret = -EINVAL;
 
 	if (!tps6586x_i2c_client)
-		return ret;
+		return;
 
 	dev = &tps6586x_i2c_client->dev;
 
-	ret = tps6586x_clr_bits(dev, TPS6586X_SUPPLYENE, EXITSLREQ_BIT);
-	if (ret)
-		return ret;
+	if (tps6586x_clr_bits(dev, TPS6586X_SUPPLYENE, EXITSLREQ_BIT))
+		return;
 
-	ret = tps6586x_set_bits(dev, TPS6586X_SUPPLYENE, SLEEP_MODE_BIT);
-	if (ret)
-		return ret;
-
-	return 0;
+	tps6586x_set_bits(dev, TPS6586X_SUPPLYENE, SLEEP_MODE_BIT);
 }
 
 static int tps6586x_gpio_get(struct gpio_chip *gc, unsigned offset)
@@ -410,15 +400,6 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	struct tps6586x *tps6586x = data;
 	u32 acks;
 	int ret = 0;
-	char *irq_info[] = {"TPS6586X_INT_PLDO_0", "TPS6586X_INT_PLDO_1", "TPS6586X_INT_PLDO_2",
-		"TPS6586X_INT_PLDO_3", "TPS6586X_INT_PLDO_4", "TPS6586X_INT_PLDO_5",
-		"TPS6586X_INT_PLDO_6", "TPS6586X_INT_PLDO_7", "TPS6586X_INT_COMP_DET",
-		"TPS6586X_INT_ADC", "TPS6586X_INT_PLDO_8", "TPS6586X_INT_PLDO_9",
-		"TPS6586X_INT_PSM_0", "TPS6586X_INT_PSM_1", "TPS6586X_INT_PSM_2",
-		"TPS6586X_INT_PSM_3", "TPS6586X_INT_RTC_ALM1", "TPS6586X_INT_ACUSB_OVP",
-		"TPS6586X_INT_USB_DET", "TPS6586X_INT_AC_DET", "TPS6586X_INT_BAT_DET",
-		"TPS6586X_INT_CHG_STAT", "TPS6586X_INT_CHG_TEMP", "TPS6586X_INT_PP",
-		"TPS6586X_INT_RESUME", "TPS6586X_INT_LOW_SYS", "TPS6586X_INT_RTC_ALM2"};
 
 	ret = tps6586x_reads(tps6586x->dev, TPS6586X_INT_ACK1,
 			     sizeof(acks), (uint8_t *)&acks);
@@ -433,10 +414,8 @@ static irqreturn_t tps6586x_irq(int irq, void *data)
 	while (acks) {
 		int i = __ffs(acks);
 
-		if (tps6586x->irq_en & (1 << i)) {
+		if (tps6586x->irq_en & (1 << i))
 			handle_nested_irq(tps6586x->irq_base + i);
-			dev_info(tps6586x->dev, "tps6586x interrupt source : %s\n", irq_info[i]);
-		}
 
 		acks &= ~(1 << i);
 	}
@@ -577,10 +556,10 @@ static int __devinit tps6586x_i2c_probe(struct i2c_client *client,
 		goto err_add_devs;
 	}
 
-	tps6586x_i2c_client = client;
+	if (pdata->use_power_off && !pm_power_off)
+		pm_power_off = tps6586x_power_off;
 
-	/* Using external oscillator... */
-	tps6586x_set_bits(&client->dev, 0xc0, 0x40);
+	tps6586x_i2c_client = client;
 
 	return 0;
 

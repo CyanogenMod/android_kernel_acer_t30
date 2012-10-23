@@ -48,6 +48,21 @@ static REPORT_FINGER_INFO_T _st_finger_infos[CFG_MAX_POINT_NUM];
 //static unsigned int _sui_irq_num= IRQ_EINT(6);
 static unsigned int _sui_irq_num = 0;
 static int _si_touch_num = 0;
+static struct kobject *touchdebug_kobj;
+static struct kobject *touchdebug_kobj_info;
+
+struct sensitivity_mapping {
+	int symbol;
+	int value;
+};
+
+static struct sensitivity_mapping sensitivity_table[] = {
+	{TOUCH_SENSITIVITY_SYMBOL_HIGH,    14},
+	{TOUCH_SENSITIVITY_SYMBOL_MEDIUM,  16},
+	{TOUCH_SENSITIVITY_SYMBOL_LOW,     19},
+};
+
+#define TOUCH_SENSITIVITY_SYMBOL_DEFAULT TOUCH_SENSITIVITY_SYMBOL_MEDIUM;
 
 int tsp_keycodes[CFG_NUMOFKEYS] = {
 	KEY_MENU,
@@ -64,6 +79,15 @@ char *tsp_keyname[CFG_NUMOFKEYS] = {
 };
 
 static bool tsp_keystatus[CFG_NUMOFKEYS];
+
+int myatoi(const char *a)
+{
+	int s = 0;
+
+	while(*a >= '0' && *a <= '9')
+		s = (s << 3) + (s << 1) + *a++ - '0';
+	return s;
+}
 
 /***********************************************************************
     [function]:
@@ -197,13 +221,11 @@ static void fts_ts_resume(struct early_suspend *handler)
 	u8 cmd;
 
 	gpio_set_value(TS_RESET, 0);
-	msleep(10);
+	msleep(20);
 	gpio_set_value(TS_RESET, 1);
-	msleep(40);
+	/***** Touch chip need 300ms to activate after reset  *****/
 
-	cmd = PMODE_ACTIVE;
 	printk("\n [TSP]:device will resume from sleep! \n");
-	fts_register_write(FT5816_REG_PMODE, &cmd);
 }
 #endif
 
@@ -221,15 +243,7 @@ static void fts_ts_release(REPORT_FINGER_INFO_T *finger)
 	struct FTS_TS_DATA_T *data = i2c_get_clientdata(this_client);
 
 	for (i = 0; i < CFG_MAX_POINT_NUM; i++) {
-		input_report_abs(data->input_dev, ABS_MT_POSITION_X, finger[i].i2_x);
-		input_report_abs(data->input_dev, ABS_MT_POSITION_Y, finger[i].i2_y);
-		input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, finger[i].u2_pressure);
-		input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, finger[i].ui2_id);
 		input_mt_sync(data->input_dev);
-#if 0
-		if (_st_finger_infos[i].u2_pressure == 0)
-			_st_finger_infos[i].u2_pressure= -1;
-#endif
 	}
 
 	input_sync(data->input_dev);
@@ -356,14 +370,14 @@ int fts_read_data(void)
 					//width = 0;
 					_si_touch_num++;
 				}
-
-				input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, _st_finger_infos[num].ui2_id);
-				input_report_abs(data->input_dev, ABS_MT_PRESSURE, _st_finger_infos[num].u2_pressure);
-				input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, _st_finger_infos[num].u2_pressure/2);
-				input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, _st_finger_infos[num].u2_pressure/2);
-				input_report_abs(data->input_dev, ABS_MT_POSITION_X, _st_finger_infos[num].i2_x);
-				input_report_abs(data->input_dev, ABS_MT_POSITION_Y, _st_finger_infos[num].i2_y);
-
+				if (_st_finger_infos[num].u2_pressure > 0) {
+					input_report_abs(data->input_dev, ABS_MT_TRACKING_ID, _st_finger_infos[num].ui2_id);
+					input_report_abs(data->input_dev, ABS_MT_PRESSURE, _st_finger_infos[num].u2_pressure);
+					input_report_abs(data->input_dev, ABS_MT_TOUCH_MAJOR, _st_finger_infos[num].u2_pressure/2);
+					input_report_abs(data->input_dev, ABS_MT_WIDTH_MAJOR, _st_finger_infos[num].u2_pressure/2);
+					input_report_abs(data->input_dev, ABS_MT_POSITION_X, _st_finger_infos[num].i2_x);
+					input_report_abs(data->input_dev, ABS_MT_POSITION_Y, _st_finger_infos[num].i2_y);
+				}
 				input_mt_sync(data->input_dev);
 			} else {
 				break;
@@ -458,39 +472,6 @@ static bool byte_read(u8* buffer, int length)
 {
 	return i2c_read_interface(buffer, length);
 }
-
-/***********************************************************************
-              SYSDEV FS
-************************************************************************/
-
-static ssize_t touch_ftmping_show(struct sys_device *dev,
-        struct sysdev_attribute *attr, char *buf)
-{
-	unsigned char chip_id = 0;
-	fts_register_read(FT5816_REG_CIPHER, &chip_id, 1);
-	return sprintf(buf, "%d", chip_id);
-}
-
-static SYSDEV_ATTR(ftmping, 0644, touch_ftmping_show, NULL);
-
-static ssize_t touch_ftmgetversion_show(struct sys_device *dev,
-	struct sysdev_attribute *attr, char *buf)
-{
-	unsigned char reg_version = 0;
-	fts_register_read(FT5816_REG_FIRMID, &reg_version, 1);
-	return sprintf(buf, "%d", reg_version);
-}
-
-static SYSDEV_ATTR(ftmgetversion, 0644, touch_ftmgetversion_show, NULL);
-
-static struct sysdev_class touch_sysclass = {
-	.name	= "touch",
-};
-
-static struct sys_device device_touch = {
-	.id	= 0,
-	.cls	= &touch_sysclass,
-};
 
 #define FTS_PACKET_LENGTH 200
 
@@ -1030,6 +1011,105 @@ unsigned char fts_ctpm_get_upg_ver(void)
 		return 0xff;
 }
 
+static ssize_t firmware_show(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				char * buf)
+{
+	unsigned char reg_version = 0;
+	ft5816_read_reg(FT5816_REG_FIRMID, &reg_version);
+	return sprintf(buf, "FT0-%x0-12041900\n", reg_version);
+}
+
+static ssize_t sensitivity_store(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				const char * buf, size_t n)
+{
+	uint8_t wdata[2] = {0};
+	int symbol = -1;
+
+	symbol = myatoi(buf);
+	pr_info("sensitive_store value:%d\n", symbol);
+
+	wdata[0] = 0x80;
+	wdata[1] = sensitivity_table[symbol].value;
+
+	if(!i2c_write_interface(wdata, 2)) {
+		pr_err("Can not write sensitivity\n");
+	}
+
+	return n;
+}
+
+static ssize_t sensitivity_show(struct kobject *kobj,
+				struct kobj_attribute *attr,
+				char * buf)
+{
+	uint8_t wdata[1] = {0};
+	uint8_t rdata[1] = {0};
+	int i, symbol = -1;
+
+	wdata[0] = 0x80;
+	if(!i2c_write_interface(wdata, 1)) {
+		goto i2c_err;
+	}
+	if(!i2c_read_interface(rdata, 1)) {
+		goto i2c_err;
+	}
+
+	for (i = 0; i < TOUCH_SENSITIVITY_SYMBOL_COUNT; i++) {
+		if (sensitivity_table[i].value == rdata[0]) {
+			symbol = sensitivity_table[i].symbol;
+			break;
+		}
+	}
+
+i2c_err:
+	if (symbol == -1) {
+		pr_info("touch sensitivity default value\n");
+		symbol = TOUCH_SENSITIVITY_SYMBOL_DEFAULT;
+	}
+
+	return sprintf(buf, "%d\n", symbol);
+}
+
+#define touch_attr(_name) \
+static struct kobj_attribute _name##_attr = { \
+	.attr = { \
+	.name = __stringify(_name), \
+	.mode = 0644, \
+	}, \
+	.show = _name##_show, \
+}
+
+static struct kobj_attribute sensitivity_attr = { \
+	.attr = { \
+	.name = __stringify(sensitivity), \
+	.mode = 0644, \
+	}, \
+	.show = sensitivity_show, \
+	.store = sensitivity_store, \
+};
+
+touch_attr(firmware);
+
+static struct attribute * g[] = {
+	&sensitivity_attr.attr,
+	NULL,
+};
+
+static struct attribute * g_info[] = {
+	&firmware_attr.attr,
+	NULL,
+};
+
+static struct attribute_group attr_group = {
+	.attrs = g,
+};
+
+static struct attribute_group attr_group_info = {
+	.attrs = g_info,
+};
+
 static int fts_ts_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct FTS_TS_DATA_T *ft5816_ts;
@@ -1068,6 +1148,7 @@ static int fts_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 
 	fts_register_read(FT5816_REG_FIRMID, &reg_version, 1);
 	printk("[TSP] firmware version = 0x%2x\n", reg_version);
+	printk("[TSP] build-in firmware version = 0x%2x\n", fts_ctpm_get_upg_ver());
 	fts_register_read(FT5816_REG_REPORT_RATE, &reg_value, 1);
 	printk("[TSP]firmware report rate = %dHz\n", reg_value * 10);
 	fts_register_read(FT5816_REG_THRES, &reg_value, 1);
@@ -1083,11 +1164,7 @@ static int fts_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 	register_early_suspend(&ft5816_ts->early_suspend);
 #endif
 
-	msleep(200);
-	fts_ctpm_fw_upgrade_with_i_file();
-
-#if 0
-	if (fts_ctpm_get_upg_ver() != reg_version) {
+	if (fts_ctpm_get_upg_ver() > reg_version) {
 		printk("[TSP] start upgrade new verison 0x%2x\n", fts_ctpm_get_upg_ver());
 		msleep(200);
 		err =  fts_ctpm_fw_upgrade_with_i_file();
@@ -1101,7 +1178,7 @@ static int fts_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 		}
 		msleep(4000);
 	}
-#endif
+
 	err = request_irq(_sui_irq_num, fts_ts_irq, IRQF_TRIGGER_FALLING, FT5816_NAME, ft5816_ts);
 
 	if (err < 0) {
@@ -1159,15 +1236,19 @@ static int fts_ts_probe(struct i2c_client *client, const struct i2c_device_id *i
 		goto exit_input_register_device_failed;
 	}
 
-	// Create SYSFS
-	err = sysdev_class_register(&touch_sysclass);
-	if (err) goto exit_sysdev_register_device_failed;
-		err = sysdev_register(&device_touch);
-	if (err) goto exit_sysdev_register_device_failed;
-		err = sysdev_create_file(&device_touch, &attr_ftmping);
-	if (err) goto exit_sysdev_register_device_failed;
-		err = sysdev_create_file(&device_touch, &attr_ftmgetversion);
-	if (err) goto exit_sysdev_register_device_failed;
+	touchdebug_kobj = kobject_create_and_add("Touch", NULL);
+	if (touchdebug_kobj == NULL)
+		pr_err("%s: subsystem_register failed\n", __func__);
+
+	if (sysfs_create_group(touchdebug_kobj, &attr_group))
+		pr_err("%s:sysfs_create_group failed\n", __func__);
+
+	touchdebug_kobj_info = kobject_create_and_add("dev-info_touch", NULL);
+	if (touchdebug_kobj_info == NULL)
+		pr_err("%s: subsystem_register failed\n", __func__);
+
+	if (sysfs_create_group(touchdebug_kobj_info, &attr_group_info))
+		pr_err("%s:sysfs_create_group failed\n", __func__);
 
 	enable_irq(_sui_irq_num);
 	printk("[TSP] file(%s), function (%s), -- end\n", __FILE__, __FUNCTION__);
@@ -1197,9 +1278,6 @@ static int __devexit fts_ts_remove(struct i2c_client *client)
 
 	ft5816_ts = (struct FTS_TS_DATA_T *)i2c_get_clientdata(client);
 	free_irq(_sui_irq_num, ft5816_ts);
-
-	sysdev_remove_file(&device_touch, &attr_ftmping);
-	sysdev_remove_file(&device_touch, &attr_ftmgetversion);
 
 	input_unregister_device(ft5816_ts->input_dev);
 	kfree(ft5816_ts);

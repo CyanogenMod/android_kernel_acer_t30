@@ -37,13 +37,6 @@
 #endif
 #endif
 
-#if defined(CONFIG_ARCH_ACER_T30)
-static struct kobject *dev_info_kobj;
-unsigned modem_idProduct;
-unsigned modem_idVendor;
-char *modem_Manufacturer;
-#endif
-
 struct usb_hub {
 	struct device		*intfdev;	/* the "interface" device */
 	struct usb_device	*hdev;
@@ -387,15 +380,6 @@ static int hub_port_status(struct usb_hub *hub, int port1,
 	} else {
 		*status = le16_to_cpu(hub->status->port.wPortStatus);
 		*change = le16_to_cpu(hub->status->port.wPortChange);
-
-		if ((hub->hdev->parent != NULL) &&
-				hub_is_superspeed(hub->hdev)) {
-			/* Translate the USB 3 port status */
-			u16 tmp = *status & USB_SS_PORT_STAT_MASK;
-			if (*status & USB_SS_PORT_STAT_POWER)
-				tmp |= USB_PORT_STAT_POWER;
-			*status = tmp;
-		}
 
 		ret = 0;
 	}
@@ -829,6 +813,12 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 					USB_PORT_FEAT_C_PORT_LINK_STATE);
 		}
 
+		if ((portchange & USB_PORT_STAT_C_BH_RESET) &&
+				hub_is_superspeed(hub->hdev)) {
+			need_debounce_delay = true;
+			clear_port_feature(hub->hdev, port1,
+					USB_PORT_FEAT_C_BH_PORT_RESET);
+		}
 		/* We can forget about a "removed" device when there's a
 		 * physical disconnect or the connect status changes.
 		 */
@@ -1307,9 +1297,7 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	 */
 #if defined(CONFIG_ARCH_ACER_T30)
 	if (!hub_is_superspeed(hdev) || !hdev->parent) {
-		if(hdev->serial && !strcmp(hdev->serial,"tegra-ehci.1"))
-			usb_disable_autosuspend(hdev);
-		else if (hdev->serial && (!strcmp(hdev->serial,"tegra-ehci.0") || !strcmp(hdev->serial,"tegra-ehci.2")))
+		if (hdev->serial && (!strcmp(hdev->serial,"tegra-ehci.0") || !strcmp(hdev->serial,"tegra-ehci.2")))
 			usb_enable_autosuspend(hdev);
 		else
 			usb_disable_autosuspend(hdev);
@@ -1318,8 +1306,6 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	if (!hub_is_superspeed(hdev) || !hdev->parent)
 		usb_enable_autosuspend(hdev);
 #endif
-
-
 	if (hdev->level == MAX_TOPO_LEVEL) {
 		dev_err(&intf->dev,
 			"Unsupported bus topology: hub nested too deep\n");
@@ -1740,15 +1726,6 @@ static void announce_device(struct usb_device *udev)
 	show_string(udev, "Product", udev->product);
 	show_string(udev, "Manufacturer", udev->manufacturer);
 	show_string(udev, "SerialNumber", udev->serial);
-
-#if defined(CONFIG_ARCH_ACER_T30)
-	/* Check if USB device is 3G module */
-	if((udev->parent == udev->bus->root_hub) && !strcmp(udev->parent->serial,"tegra-ehci.1")) {
-		modem_idProduct = udev->descriptor.idProduct;
-		modem_Manufacturer = udev->manufacturer;
-		modem_idVendor = udev->descriptor.idVendor;
-	}
-#endif
 }
 #else
 static inline void announce_device(struct usb_device *udev) { }
@@ -2193,11 +2170,76 @@ static int hub_port_reset(struct usb_hub *hub, int port1,
 	return status;
 }
 
+/* Warm reset a USB3 protocol port */
+static int hub_port_warm_reset(struct usb_hub *hub, int port)
+{
+	int ret;
+	u16 portstatus, portchange;
+
+	if (!hub_is_superspeed(hub->hdev)) {
+		dev_err(hub->intfdev, "only USB3 hub support warm reset\n");
+		return -EINVAL;
+	}
+
+	/* Warm reset the port */
+	ret = set_port_feature(hub->hdev,
+				port, USB_PORT_FEAT_BH_PORT_RESET);
+	if (ret) {
+		dev_err(hub->intfdev, "cannot warm reset port %d\n", port);
+		return ret;
+	}
+
+	msleep(20);
+	ret = hub_port_status(hub, port, &portstatus, &portchange);
+
+	if (portchange & USB_PORT_STAT_C_RESET)
+		clear_port_feature(hub->hdev, port, USB_PORT_FEAT_C_RESET);
+
+	if (portchange & USB_PORT_STAT_C_BH_RESET)
+		clear_port_feature(hub->hdev, port,
+					USB_PORT_FEAT_C_BH_PORT_RESET);
+
+	if (portchange & USB_PORT_STAT_C_LINK_STATE)
+		clear_port_feature(hub->hdev, port,
+					USB_PORT_FEAT_C_PORT_LINK_STATE);
+
+	return ret;
+}
+
+/* Check if a port is power on */
+static int port_is_power_on(struct usb_hub *hub, unsigned portstatus)
+{
+	int ret = 0;
+
+	if (hub_is_superspeed(hub->hdev)) {
+		if (portstatus & USB_SS_PORT_STAT_POWER)
+			ret = 1;
+	} else {
+		if (portstatus & USB_PORT_STAT_POWER)
+			ret = 1;
+	}
+
+	return ret;
+}
+
 #ifdef	CONFIG_PM
 
-#define MASK_BITS	(USB_PORT_STAT_POWER | USB_PORT_STAT_CONNECTION | \
-				USB_PORT_STAT_SUSPEND)
-#define WANT_BITS	(USB_PORT_STAT_POWER | USB_PORT_STAT_CONNECTION)
+/* Check if a port is suspended(USB2.0 port) or in U3 state(USB3.0 port) */
+static int port_is_suspended(struct usb_hub *hub, unsigned portstatus)
+{
+	int ret = 0;
+
+	if (hub_is_superspeed(hub->hdev)) {
+		if ((portstatus & USB_PORT_STAT_LINK_STATE)
+				== USB_SS_PORT_LS_U3)
+			ret = 1;
+	} else {
+		if (portstatus & USB_PORT_STAT_SUSPEND)
+			ret = 1;
+	}
+
+	return ret;
+}
 
 /* Determine whether the device on a port is ready for a normal resume,
  * is ready for a reset-resume, or should be disconnected.
@@ -2207,7 +2249,9 @@ static int check_port_resume_type(struct usb_device *udev,
 		int status, unsigned portchange, unsigned portstatus)
 {
 	/* Is the device still present? */
-	if (status || (portstatus & MASK_BITS) != WANT_BITS) {
+	if (status || port_is_suspended(hub, portstatus) ||
+			!port_is_power_on(hub, portstatus) ||
+			!(portstatus & USB_PORT_STAT_CONNECTION)) {
 		if (status >= 0)
 			status = -ENODEV;
 	}
@@ -2318,14 +2362,10 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 	}
 
 	/* see 7.1.7.6 */
-	/* Clear PORT_POWER if it's a USB3.0 device connected to USB 3.0
-	 * external hub.
-	 * FIXME: this is a temporary workaround to make the system able
-	 * to suspend/resume.
-	 */
-	if ((hub->hdev->parent != NULL) && hub_is_superspeed(hub->hdev))
-		status = clear_port_feature(hub->hdev, port1,
-						USB_PORT_FEAT_POWER);
+	if (hub_is_superspeed(hub->hdev))
+		status = set_port_feature(hub->hdev,
+				port1 | (USB_SS_PORT_LS_U3 << 3),
+				USB_PORT_FEAT_LINK_STATE);
 	else
 		status = set_port_feature(hub->hdev, port1,
 						USB_PORT_FEAT_SUSPEND);
@@ -2476,7 +2516,7 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 
 	/* Skip the initial Clear-Suspend step for a remote wakeup */
 	status = hub_port_status(hub, port1, &portstatus, &portchange);
-	if (status == 0 && !(portstatus & USB_PORT_STAT_SUSPEND))
+	if (status == 0 && !port_is_suspended(hub, portstatus))
 		goto SuspendCleared;
 
 	// dev_dbg(hub->intfdev, "resume port %d\n", port1);
@@ -2484,8 +2524,13 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 	set_bit(port1, hub->busy_bits);
 
 	/* see 7.1.7.7; affects power usage, but not budgeting */
-	status = clear_port_feature(hub->hdev,
-			port1, USB_PORT_FEAT_SUSPEND);
+	if (hub_is_superspeed(hub->hdev))
+		status = set_port_feature(hub->hdev,
+				port1 | (USB_SS_PORT_LS_U0 << 3),
+				USB_PORT_FEAT_LINK_STATE);
+	else
+		status = clear_port_feature(hub->hdev,
+				port1, USB_PORT_FEAT_SUSPEND);
 	if (status) {
 		dev_dbg(hub->intfdev, "can't resume port %d, status %d\n",
 				port1, status);
@@ -2507,9 +2552,15 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 
  SuspendCleared:
 	if (status == 0) {
-		if (portchange & USB_PORT_STAT_C_SUSPEND)
-			clear_port_feature(hub->hdev, port1,
-					USB_PORT_FEAT_C_SUSPEND);
+		if (hub_is_superspeed(hub->hdev)) {
+			if (portchange & USB_PORT_STAT_C_LINK_STATE)
+				clear_port_feature(hub->hdev, port1,
+					USB_PORT_FEAT_C_PORT_LINK_STATE);
+		} else {
+			if (portchange & USB_PORT_STAT_C_SUSPEND)
+				clear_port_feature(hub->hdev, port1,
+						USB_PORT_FEAT_C_SUSPEND);
+		}
 	}
 
 	clear_bit(port1, hub->busy_bits);
@@ -3183,7 +3234,7 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 
 		/* maybe switch power back on (e.g. root hub was reset) */
 		if ((wHubCharacteristics & HUB_CHAR_LPSM) < 2
-				&& !(portstatus & USB_PORT_STAT_POWER))
+				&& !port_is_power_on(hub, portstatus))
 			set_port_feature(hdev, port1, USB_PORT_FEAT_POWER);
 
 		if (portstatus & USB_PORT_STAT_ENABLE)
@@ -3526,6 +3577,16 @@ static void hub_events(void)
 						USB_PORT_FEAT_C_PORT_CONFIG_ERROR);
 			}
 
+			/* Warm reset a USB3 protocol port if it's in
+			 * SS.Inactive state.
+			 */
+			if (hub_is_superspeed(hub->hdev) &&
+				(portstatus & USB_PORT_STAT_LINK_STATE)
+					== USB_SS_PORT_LS_SS_INACTIVE) {
+				dev_dbg(hub_dev, "warm reset port %d\n", i);
+				hub_port_warm_reset(hub, i);
+			}
+
 			if (connect_change)
 				hub_port_connect_change(hub, i,
 						portstatus, portchange);
@@ -3620,84 +3681,8 @@ static struct usb_driver hub_driver = {
 	.supports_autosuspend =	1,
 };
 
-#if defined(CONFIG_ARCH_ACER_T30)
-static ssize_t modem_idVendor_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%d", modem_idVendor);
-	return (s - buf);
-}
-
-
-static ssize_t modem_idProduct_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%d", modem_idProduct);
-	return (s - buf);
-}
-
-
-static ssize_t modem_Manufacturer_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
-{
-	char *s = buf;
-
-	s += sprintf(s, "%s", modem_Manufacturer);
-	return (s - buf);
-}
-
-static struct kobj_attribute modem_idVendor_attr = {
-	.attr = {
-		.name = "idVendor",
-		.mode = 0644,
-	},
-	.show = modem_idVendor_show,
-};
-
-static struct kobj_attribute modem_idProduct_attr = {
-	.attr = {
-		.name = "idProduct",
-		.mode = 0644,
-	},
-	.show = modem_idProduct_show,
-};
-
-static struct kobj_attribute modem_Manufacturer_attr = {
-	.attr = {
-		.name = "Manufacturer",
-		.mode = 0644,
-	},
-	.show = modem_Manufacturer_show,
-};
-
-static struct attribute * modem_info[] = {
-	&modem_idVendor_attr.attr,
-	&modem_idProduct_attr.attr,
-	&modem_Manufacturer_attr.attr,
-	NULL,
-};
-
-static struct attribute_group usb_modem_attr_group =
-{
-	.attrs = modem_info,
-};
-#endif
-
 int usb_hub_init(void)
 {
-#if defined(CONFIG_ARCH_ACER_T30)
-	int err = 0;
-
-	dev_info_kobj = kobject_create_and_add("dev-info_usb-modem", NULL);
-	if(dev_info_kobj == NULL) {
-		printk(KERN_INFO "dev-info_usb-modem: create kobject failed\n");
-        } else {
-		err = sysfs_create_group(dev_info_kobj, &usb_modem_attr_group);
-		if(err)
-			printk(KERN_INFO "dev-info_usb-modem: sysfs_create_group failed\n");
-	}
-#endif
 	if (usb_register(&hub_driver) < 0) {
 		printk(KERN_ERR "%s: can't register hub driver\n",
 			usbcore_name);

@@ -258,7 +258,7 @@ config USB_NET_NET1080
 	  optionally with LEDs that indicate traffic
 
 config USB_NET_PLUSB
-	tristate "Prolific PL-2301/2302 based cables"
+	tristate "Prolific PL-2301/2302/25A1 based cables"
 	# if the handshake/init/reset problems, from original 'plusb',
 	# are ever resolved ... then remove "experimental"
 	depends on USB_USBNET && EXPERIMENTAL
@@ -385,6 +385,16 @@ config USB_NET_CX82310_ETH
 	  router with USB ethernet port. This driver is for routers only,
 	  it will not work with ADSL modems (use cxacru driver instead).
 
+config USB_NET_KALMIA
+	tristate "Samsung Kalmia based LTE USB modem"
+	depends on USB_USBNET
+	help
+	  Choose this option if you have a Samsung Kalmia based USB modem
+	  as Samsung GT-B3730.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called kalmia.
+
 config USB_HSO
 	tristate "Option USB High Speed Mobile Devices"
 	depends on USB && RFKILL
@@ -455,15 +465,5 @@ config USB_NET_RAW_IP
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rmnet.
-
-config USB_GOBI3K_NET
-    tristate "USB-to-WWAN Driver for Gobi3K modems"
-    depends on USB_USBNET
-    default m
-    help
-      Choose this option if you have a Sierra Wireless USB-to-WWAN device with Gobi support.
-
-      To compile this driver as a module, choose M here: the
-      module will be called GobiNet.
 
 endmenu

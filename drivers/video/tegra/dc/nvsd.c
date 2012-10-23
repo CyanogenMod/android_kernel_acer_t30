@@ -1,7 +1,7 @@
 /*
  * drivers/video/tegra/dc/nvsd.c
  *
- * Copyright (c) 2010-2012, NVIDIA Corporation.
+ * Copyright (c) 2010-2012, NVIDIA CORPORATION, All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -26,9 +26,22 @@
 #include "dc_priv.h"
 #include "nvsd.h"
 
+#if defined(CONFIG_ACER_DIDIM_RULE)
+static char *nvsd_profile_name[] = {
+	"PROFILE_UNKNOWN",
+	"PROFILE_HIGH",
+	"PROFILE_BALANCED",
+	"PROFILE_POWER_SAVER",
+};
+#endif
+
 /* Elements for sysfs access */
 #define NVSD_ATTR(__name) static struct kobj_attribute nvsd_attr_##__name = \
 	__ATTR(__name, S_IRUGO|S_IWUSR, nvsd_settings_show, nvsd_settings_store)
+#if defined(CONFIG_ACER_DIDIM_RULE)
+#define NVSD_ATTR_READ_ONLY(__name) static struct kobj_attribute nvsd_attr_##__name = \
+	__ATTR(__name, S_IRUGO, nvsd_settings_show, NULL)
+#endif
 #define NVSD_ATTRS_ENTRY(__name) (&nvsd_attr_##__name.attr)
 #define IS_NVSD_ATTR(__name) (attr == &nvsd_attr_##__name)
 
@@ -55,6 +68,12 @@ NVSD_ATTR(fc_time_limit);
 NVSD_ATTR(fc_threshold);
 NVSD_ATTR(lut);
 NVSD_ATTR(bltf);
+#if defined(CONFIG_ACER_DIDIM_RULE)
+NVSD_ATTR(aggress_list);
+NVSD_ATTR(scenario);
+NVSD_ATTR_READ_ONLY(list_size);
+NVSD_ATTR(aggress_table);
+#endif
 static struct kobj_attribute nvsd_attr_registers =
 	__ATTR(registers, S_IRUGO, nvsd_registers_show, NULL);
 
@@ -74,6 +93,12 @@ static struct attribute *nvsd_attrs[] = {
 	NVSD_ATTRS_ENTRY(lut),
 	NVSD_ATTRS_ENTRY(bltf),
 	NVSD_ATTRS_ENTRY(registers),
+#if defined(CONFIG_ACER_DIDIM_RULE)
+	NVSD_ATTRS_ENTRY(aggress_list),
+	NVSD_ATTRS_ENTRY(scenario),
+	NVSD_ATTRS_ENTRY(list_size),
+	NVSD_ATTRS_ENTRY(aggress_table),
+#endif
 	NULL,
 };
 
@@ -158,10 +183,11 @@ static bool nvsd_phase_in_adjustments(struct tegra_dc *dc,
 		every ADJ_PHASE_STEP frames*/
 		if ((step-- & ADJ_PHASE_STEP) == ADJ_PHASE_STEP) {
 
-			if (val != cur_sd_brightness)
+			if (val != cur_sd_brightness) {
 				val > cur_sd_brightness ?
 				(cur_sd_brightness++) :
 				(cur_sd_brightness--);
+			}
 
 			if (target_k != cur_k) {
 				if (target_k > cur_k)
@@ -342,6 +368,38 @@ static bool nvsd_update_agg(struct tegra_dc_sd_settings *settings, int agg_val)
 	return false;
 }
 
+#if defined(CONFIG_ACER_DIDIM_RULE)
+static bool nvsd_update_agg_internal(struct tegra_dc_sd_settings *settings, long int *val)
+{
+	int tmp = 0;
+
+	if (settings->scenario < 0 || settings->scenario >= TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE) {
+		return false;
+	}
+
+	tmp = settings->aggress_list[settings->scenario];
+	if (tmp > 5 || tmp < 0) {
+		return false;
+	}
+
+	*val = tmp | SD_MAKE_AGG_PRI_LVL(3);
+
+	return true;
+}
+
+static bool nvsd_update_scenario(struct tegra_dc_sd_settings *settings, int scenario_val)
+{
+	bool res = false;
+
+	if (scenario_val >= 0 && scenario_val < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE) {
+		settings->scenario = scenario_val;
+		res = true;
+	}
+
+	return res;
+}
+#endif
+
 /* Functional initialization */
 void nvsd_init(struct tegra_dc *dc, struct tegra_dc_sd_settings *settings)
 {
@@ -377,7 +435,10 @@ void nvsd_init(struct tegra_dc *dc, struct tegra_dc_sd_settings *settings)
 	val = tegra_dc_readl(dc, DC_DISP_SD_CONTROL);
 
 	if (val & SD_ENABLE_NORMAL)
-		i = tegra_dc_readl(dc, DC_DISP_SD_HW_K_VALUES);
+		if (settings->phase_in_adjustments)
+			i = tegra_dc_readl(dc, DC_DISP_SD_MAN_K_VALUES);
+		else
+			i = tegra_dc_readl(dc, DC_DISP_SD_HW_K_VALUES);
 	else
 		i = 0; /* 0 values for RGB = 1.0, i.e. non-affected */
 
@@ -580,6 +641,41 @@ static ssize_t nvsd_bltf_show(struct tegra_dc_sd_settings *sd_settings,
 	return res;
 }
 
+#if defined(CONFIG_ACER_DIDIM_RULE)
+static ssize_t nvsd_aggress_list_show(struct tegra_dc_sd_settings *sd_settings, char *buf, ssize_t res)
+{
+	u32 i = 0;
+
+	memset(buf, 0, res);
+	for (i = 0; i < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; i++) {
+		res += snprintf(buf + res, PAGE_SIZE - res, "%d,", sd_settings->aggress_list[i]);
+	}
+	if (res > 0) {
+		buf[res-1] = '\n';
+	} else {
+		pr_warning("[NVSD] Aggressiveness table size is zero!!\n");
+	}
+	return res;
+}
+
+static ssize_t nvsd_aggress_table_show(struct tegra_dc_sd_settings *sd_settings, char *buf, ssize_t res)
+{
+	u32 i = 0;
+	u32 j = 0;
+
+	memset(buf, 0, res);
+	for (i = 0; i < TEGRA_DC_SD_TABLE_SIZE; i++) {
+		res += snprintf(buf + res, PAGE_SIZE - res, "{");
+		for (j = 0; j < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; j++) {
+			res += snprintf(buf + res, PAGE_SIZE - res, "%2d,", sd_settings->aggress_table[i].aggress_list[j]);
+		}
+		buf[res-1] = '}';
+		res += snprintf(buf + res, PAGE_SIZE - res, " [%s]\n", nvsd_profile_name[sd_settings->aggress_table[i].profile]);
+	}
+	return res;
+}
+#endif
+
 /* Sysfs accessors */
 static ssize_t nvsd_settings_show(struct kobject *kobj,
 	struct kobj_attribute *attr, char *buf)
@@ -634,6 +730,18 @@ static ssize_t nvsd_settings_show(struct kobject *kobj,
 			res = nvsd_lut_show(sd_settings, buf, res);
 		else if (IS_NVSD_ATTR(bltf))
 			res = nvsd_bltf_show(sd_settings, buf, res);
+#if defined(CONFIG_ACER_DIDIM_RULE)
+		else if (IS_NVSD_ATTR(aggress_list))
+			res = nvsd_aggress_list_show(sd_settings, buf, res);
+		else if (IS_NVSD_ATTR(scenario))
+			res = snprintf(buf, PAGE_SIZE, "%d\n",
+				sd_settings->scenario);
+		else if (IS_NVSD_ATTR(list_size))
+			res = snprintf(buf, PAGE_SIZE, "%d\n",
+				TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE);
+		else if (IS_NVSD_ATTR(aggress_table))
+			res = nvsd_aggress_table_show(sd_settings, buf, res);
+#endif
 		else
 			res = -EINVAL;
 	} else {
@@ -720,6 +828,109 @@ static int nvsd_bltf_store(struct tegra_dc_sd_settings *sd_settings,
 	return 0;
 }
 
+#if defined(CONFIG_ACER_DIDIM_RULE)
+static int nvsd_aggress_list_store(struct tegra_dc_sd_settings *sd_settings, const char *buf, size_t count)
+{
+	char *last = (char *)buf;
+	int i = 0;
+	u8 list[TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE];
+	bool invalid = true;
+
+	for (i = 0; i < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; i++) {
+		list[i] = simple_strtoul(last, &last, 10);
+		if (list[i] > 5 || list[i] < 0) {
+			break;
+		}
+		last++;
+		if (last - buf >= count) {
+			if (i == (TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE - 1)) {
+				invalid = false;
+			}
+			break;
+		}
+	}
+	if (invalid) {
+		pr_warning("[NVSD] The new list is invalid: %s\n", buf);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; i++) {
+		sd_settings->aggress_list[i] = list[i];
+	}
+
+	return 0;
+}
+
+static int nvsd_aggress_table_store(struct tegra_dc_sd_settings *sd_settings, const char *buf, size_t count)
+{
+	char *last = (char *)buf;
+	int i = 0;
+	int j = 0;
+	struct tegra_dc_sd_map aggress_table[TEGRA_DC_SD_TABLE_SIZE];
+	int tmp = 0;
+	bool invalid = false;
+
+	for (i = 0; i < TEGRA_DC_SD_TABLE_SIZE; i++) {
+		tmp = simple_strtoul(last, &last, 10);
+		if (tmp >= SD_PROFILE_END || tmp <= SD_PROFILE_UNKNOWN) {
+			invalid = true;
+			break;
+		}
+		aggress_table[i].profile = tmp;
+		last++;
+		for (j = 0; j < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; j++) {
+			tmp = simple_strtoul(last, &last, 10);
+			if (tmp > 5 || tmp < 0) {
+				invalid = true;
+				break;
+			}
+			aggress_table[i].aggress_list[j] = tmp;
+			last++;
+		}
+	}
+	if (invalid) {
+		pr_warning("[NVSD] The new table is invalid: %s\n", buf);
+		return -EINVAL;
+	}
+	memcpy(sd_settings->aggress_table, aggress_table, sizeof(aggress_table));
+
+	return 0;
+}
+
+extern int acer_power_mode_get(void);
+
+static int nvsd_update_aggress_list(struct tegra_dc_sd_settings *sd_settings)
+{
+	int res = -EINVAL;
+	int i = 0;
+	int j = 0;
+	long int power_mode = 0;
+
+	power_mode = acer_power_mode_get();
+
+	if (power_mode >= SD_PROFILE_END || power_mode <= SD_PROFILE_UNKNOWN) {
+		pr_err("[NVSD] The power mode is invalid[%ld]\n", power_mode);
+		return res;
+	}
+
+	for (i = 0; i < TEGRA_DC_SD_TABLE_SIZE; i++) {
+		if (power_mode == sd_settings->aggress_table[i].profile) {
+			for (j = 0; j < TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE; j++) {
+				sd_settings->aggress_list[j] = sd_settings->aggress_table[i].aggress_list[j];
+			}
+			res = 0;
+			break;
+		}
+	}
+
+	if (res != 0) {
+		pr_err("[NVSD] There is no item can match %s in aggress_table\n", nvsd_profile_name[power_mode]);
+	}
+
+	return res;
+}
+#endif
+
 static ssize_t nvsd_settings_store(struct kobject *kobj,
 	struct kobj_attribute *attr, const char *buf, size_t count)
 {
@@ -746,6 +957,21 @@ static ssize_t nvsd_settings_store(struct kobject *kobj,
 				nvsd_check_and_update(0, 1, enable);
 			}
 		} else if (IS_NVSD_ATTR(aggressiveness)) {
+#if defined(CONFIG_ACER_DIDIM_RULE)
+			err = strict_strtol(buf, 10, &result);
+			if (err)
+				return err;
+			pr_warning("[NVSD] Access aggressiveness[%ld|pri_%ld,agg_%ld]\n", result, SD_AGG_PRI_LVL(result), SD_GET_AGG(result));
+			if (nvsd_update_aggress_list(sd_settings)) {
+				res = -EINVAL;
+			} else {
+				if (nvsd_update_agg_internal(sd_settings, &result)) {
+					if (nvsd_update_agg(sd_settings, result) && !sd_settings->phase_in_settings) {
+						settings_updated = true;
+					}
+				}
+			}
+#else
 			err = strict_strtol(buf, 10, &result);
 			if (err)
 				return err;
@@ -753,6 +979,7 @@ static ssize_t nvsd_settings_store(struct kobject *kobj,
 			if (nvsd_update_agg(sd_settings, result)
 					&& !sd_settings->phase_in_settings)
 				settings_updated = true;
+#endif
 
 		} else if (IS_NVSD_ATTR(phase_in_settings)) {
 			nvsd_check_and_update(0, 1, phase_in_settings);
@@ -794,6 +1021,46 @@ static ssize_t nvsd_settings_store(struct kobject *kobj,
 				res = -EINVAL;
 			else
 				settings_updated = true;
+#if defined(CONFIG_ACER_DIDIM_RULE)
+		} else if (IS_NVSD_ATTR(aggress_list)) {
+			if (nvsd_aggress_list_store(sd_settings, buf, count)) {
+				res = -EINVAL;
+			} else {
+				if (nvsd_update_agg_internal(sd_settings, &result)) {
+					if (nvsd_update_agg(sd_settings, result) && !sd_settings->phase_in_settings) {
+						settings_updated = true;
+					}
+				}
+			}
+		} else if (IS_NVSD_ATTR(scenario)) {
+			err = strict_strtol(buf, 10, &result);
+			if (err) {
+				return err;
+			}
+			if (nvsd_update_scenario(sd_settings, result)) {
+				if (nvsd_update_agg_internal(sd_settings, &result)) {
+					if (nvsd_update_agg(sd_settings, result) && !sd_settings->phase_in_settings) {
+						settings_updated = true;
+					}
+				}
+			} else {
+				res = -EINVAL;
+			}
+		} else if (IS_NVSD_ATTR(aggress_table)) {
+			if (nvsd_aggress_table_store(sd_settings, buf, count)) {
+				res = -EINVAL;
+			} else {
+				if (nvsd_update_aggress_list(sd_settings)) {
+					res = -EINVAL;
+				} else {
+					if (nvsd_update_agg_internal(sd_settings, &result)) {
+						if (nvsd_update_agg(sd_settings, result) && !sd_settings->phase_in_settings) {
+							settings_updated = true;
+						}
+					}
+				}
+			}
+#endif
 		} else {
 			res = -EINVAL;
 		}
@@ -805,9 +1072,12 @@ static ssize_t nvsd_settings_store(struct kobject *kobj,
 				mutex_unlock(&dc->lock);
 				return -ENODEV;
 			}
-			mutex_unlock(&dc->lock);
 
+			tegra_dc_hold_dc_out(dc);
 			nvsd_init(dc, sd_settings);
+			tegra_dc_release_dc_out(dc);
+
+			mutex_unlock(&dc->lock);
 
 			/* Update backlight state IFF we're disabling! */
 			if (!sd_settings->enable && sd_settings->bl_device) {

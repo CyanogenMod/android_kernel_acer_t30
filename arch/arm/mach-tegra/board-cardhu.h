@@ -42,6 +42,8 @@
 #define BOARD_PMU_PM299   0x0263
 
 /* SKU Information */
+#define BOARD_SKU_B11	0xb11
+
 #define SKU_DCDC_TPS62361_SUPPORT	0x1
 #define SKU_SLT_ULPI_SUPPORT		0x2
 #define SKU_T30S_SUPPORT		0x4
@@ -74,10 +76,15 @@
 #define BOARD_FAB_A03			0x3
 #define BOARD_FAB_A04			0x4
 #define BOARD_FAB_A05			0x5
+#define BOARD_FAB_A06			0x6
+#define BOARD_FAB_A07			0x7
 
 /* Display Board ID */
 #define BOARD_DISPLAY_PM313		0x030D
+#define BOARD_DISPLAY_E1213		0x0C0D
 #define BOARD_DISPLAY_E1247		0x0C2F
+#define BOARD_DISPLAY_E1253		0x0C35
+#define BOARD_DISPLAY_E1506		0x0F06
 
 /* External peripheral act as gpio */
 /* TPS6591x GPIOs */
@@ -207,23 +214,24 @@ int cardhu_scroll_init(void);
 int cardhu_keys_init(void);
 int cardhu_pins_state_init(void);
 int cardhu_emc_init(void);
-int cardhu_power_off_init(void);
 int cardhu_edp_init(void);
 int cardhu_pmon_init(void);
 int cardhu_pm298_gpio_switch_regulator_init(void);
 int cardhu_pm298_regulator_init(void);
 int cardhu_pm299_gpio_switch_regulator_init(void);
 int cardhu_pm299_regulator_init(void);
-void __init cardhu_tsensor_init(void);
 
-/* Invensense MPU Definitions */
-#define MPU_GYRO_NAME		"mpu3050"
+extern struct tegra_uart_platform_data cardhu_irda_pdata;
+
+#define MPU_TYPE_MPU3050	1
+#define MPU_TYPE_MPU6050	2
+#define MPU_GYRO_TYPE		MPU_TYPE_MPU3050
 #define MPU_GYRO_IRQ_GPIO	TEGRA_GPIO_PX1
 #define MPU_GYRO_ADDR		0x68
 #define MPU_GYRO_BUS_NUM	2
 #define MPU_GYRO_ORIENTATION	{ 0, -1, 0, -1, 0, 0, 0, 0, -1 }
 #define MPU_ACCEL_NAME		"kxtf9"
-#define MPU_ACCEL_IRQ_GPIO	TEGRA_GPIO_PL1
+#define MPU_ACCEL_IRQ_GPIO	0 /* DISABLE ACCELIRQ:  TEGRA_GPIO_PL1 */
 #define MPU_ACCEL_ADDR		0x0F
 #define MPU_ACCEL_BUS_NUM	2
 #define MPU_ACCEL_ORIENTATION	{ 0, -1, 0, -1, 0, 0, 0, 0, -1 }

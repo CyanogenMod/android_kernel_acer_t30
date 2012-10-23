@@ -4,9 +4,6 @@
 # 14 Sep 2000, Christoph Hellwig <hch@infradead.org>
 # Rewritten to use lists instead of if-statements.
 # 
-ifeq ($(CONFIG_ACER_SECURE_MOUNT),y)
-EXTRA_CFLAGS += -DCONFIG_SECURE_MOUNT
-endif
 
 obj-y :=	open.o read_write.o file_table.o super.o \
 		char_dev.o stat.o exec.o pipe.o namei.o fcntl.o \
@@ -32,7 +29,6 @@ obj-$(CONFIG_EVENTFD)		+= eventfd.o
 obj-$(CONFIG_AIO)               += aio.o
 obj-$(CONFIG_FILE_LOCKING)      += locks.o
 obj-$(CONFIG_COMPAT)		+= compat.o compat_ioctl.o
-obj-$(CONFIG_NFSD_DEPRECATED)	+= nfsctl.o
 obj-$(CONFIG_BINFMT_AOUT)	+= binfmt_aout.o
 obj-$(CONFIG_BINFMT_EM86)	+= binfmt_em86.o
 obj-$(CONFIG_BINFMT_MISC)	+= binfmt_misc.o
@@ -130,3 +126,8 @@ obj-$(CONFIG_PSTORE)		+= pstore/
 
 # Patched by YAFFS
 obj-$(CONFIG_YAFFS_FS)		+= yaffs2/
+
+ifeq ($(CONFIG_ACER_SECURE_MOUNT),y)
+EXTRA_CFLAGS += -DCONFIG_SECURE_MOUNT
+endif
+

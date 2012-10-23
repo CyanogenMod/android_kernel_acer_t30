@@ -7,7 +7,7 @@
  *	Colin Cross <ccross@google.com>
  *	Based on arch/arm/plat-omap/cpu-omap.c, (C) 2005 Nokia Corporation
  *
- * Copyright (C) 2010-2012 NVIDIA Corporation
+ * Copyright (C) 2010-2012 NVIDIA CORPORATION. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -36,7 +36,6 @@
 
 #include <asm/system.h>
 
-#include <mach/hardware.h>
 #include <mach/clk.h>
 #include <mach/edp.h>
 
@@ -58,6 +57,66 @@ static bool is_suspended;
 static int suspend_index;
 
 static bool force_policy_max;
+
+#if defined(CONFIG_ARCH_ACER_T30)
+static int acer_power_mode;
+static struct kobject *power_mode_kobj;
+
+static size_t performance_mode[10] = {0, 0};
+static int performance_mode_size;
+static size_t balanced_mode[10] = {0, 0};
+static int balanced_mode_size;
+static size_t powersaving_mode[10] = {0, 0};
+static int powersaving_mode_size;
+
+int acer_power_mode_get(void)
+{
+	return acer_power_mode;
+}
+EXPORT_SYMBOL(acer_power_mode_get);
+
+static ssize_t power_mode_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+	char *s = buf;
+	s += sprintf(s, "%d\n\r", acer_power_mode);
+	return (s - buf);
+}
+
+static ssize_t power_mode_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+{
+	int ret;
+	unsigned long val;
+
+	ret = strict_strtoul(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+
+	acer_power_mode = val;
+	return n;
+}
+
+#define power_mode_attr(_name, _mode) \
+	static struct kobj_attribute _name##_attr = { \
+	.attr = { \
+	.name = __stringify(_name), \
+	.mode = _mode, \
+	}, \
+	.show = _name##_show, \
+	.store = _name##_store, \
+	}
+
+power_mode_attr(power_mode, 0660);
+
+static struct attribute * group[] = {
+	&power_mode_attr.attr,
+	NULL,
+};
+
+static struct attribute_group attr_group =
+{
+	.attrs = group,
+};
+#endif
 
 static int force_policy_max_set(const char *arg, const struct kernel_param *kp)
 {
@@ -88,6 +147,44 @@ module_param_cb(force_policy_max, &policy_ops, &force_policy_max, 0644);
 
 static unsigned int cpu_user_cap;
 
+static inline void _cpu_user_cap_set_locked(void)
+{
+#if defined(CONFIG_ARCH_ACER_T30)
+	if (acer_power_mode == 1) {  // performance
+		cpu_user_cap = 0;
+	}
+	else if (acer_power_mode == 2) {  // balanced
+		cpu_user_cap = balanced_mode[0];  // cpu freq
+	}
+	else if (acer_power_mode == 3) {  // power-saving
+		cpu_user_cap = powersaving_mode[0];  // cpu freq
+	}
+#endif
+
+#ifndef CONFIG_TEGRA_CPU_CAP_EXACT_FREQ
+	if (cpu_user_cap != 0) {
+		int i;
+		for (i = 0; freq_table[i].frequency != CPUFREQ_TABLE_END; i++) {
+			if (freq_table[i].frequency > cpu_user_cap)
+				break;
+		}
+		i = (i == 0) ? 0 : i - 1;
+		cpu_user_cap = freq_table[i].frequency;
+	}
+#endif
+	tegra_cpu_set_speed_cap(NULL);
+}
+
+void tegra_cpu_user_cap_set(unsigned int speed_khz)
+{
+	mutex_lock(&tegra_cpu_lock);
+
+	cpu_user_cap = speed_khz;
+	_cpu_user_cap_set_locked();
+
+	mutex_unlock(&tegra_cpu_lock);
+}
+
 static int cpu_user_cap_set(const char *arg, const struct kernel_param *kp)
 {
 	int ret;
@@ -95,21 +192,8 @@ static int cpu_user_cap_set(const char *arg, const struct kernel_param *kp)
 	mutex_lock(&tegra_cpu_lock);
 
 	ret = param_set_uint(arg, kp);
-	if (ret == 0) {
-#ifndef CONFIG_TEGRA_CPU_CAP_EXACT_FREQ
-		if (cpu_user_cap != 0) {
-			int i;
-			for (i = 0; freq_table[i].frequency !=
-				CPUFREQ_TABLE_END; i++) {
-				if (freq_table[i].frequency > cpu_user_cap)
-					break;
-			}
-			i = (i == 0) ? 0 : i - 1;
-			cpu_user_cap = freq_table[i].frequency;
-		}
-#endif
-		tegra_cpu_set_speed_cap(NULL);
-	}
+	if (ret == 0)
+		_cpu_user_cap_set_locked();
 
 	mutex_unlock(&tegra_cpu_lock);
 	return ret;
@@ -230,12 +314,12 @@ int tegra_edp_update_thermal_zone(int temperature)
 
 	/* Update cpu rate if cpufreq (at least on cpu0) is already started;
 	   alter cpu dvfs table for this thermal zone if necessary */
-	tegra_cpu_dvfs_alter(edp_thermal_index, true);
+	tegra_cpu_dvfs_alter(edp_thermal_index, &edp_cpumask, true, 0);
 	if (target_cpu_speed[0]) {
 		edp_update_limit();
 		tegra_cpu_set_speed_cap(NULL);
 	}
-	tegra_cpu_dvfs_alter(edp_thermal_index, false);
+	tegra_cpu_dvfs_alter(edp_thermal_index, &edp_cpumask, false, 0);
 	mutex_unlock(&tegra_cpu_lock);
 
 	return ret;
@@ -250,13 +334,15 @@ int tegra_system_edp_alarm(bool alarm)
 	system_edp_alarm = alarm;
 
 	/* Update cpu rate if cpufreq (at least on cpu0) is already started
-	   and cancel emergency throttling after edp limit is applied */
+	   and cancel emergency throttling after either edp limit is applied
+	   or alarm is canceled */
 	if (target_cpu_speed[0]) {
 		edp_update_limit();
 		ret = tegra_cpu_set_speed_cap(NULL);
-		if (!ret && alarm)
-			tegra_edp_throttle_cpu_now(0);
 	}
+	if (!ret || !alarm)
+		tegra_edp_throttle_cpu_now(0);
+
 	mutex_unlock(&tegra_cpu_lock);
 
 	return ret;
@@ -313,19 +399,23 @@ static int tegra_cpu_edp_notify(
 		new_speed = edp_governor_speed(cpu_speed);
 		if (new_speed < cpu_speed) {
 			ret = tegra_cpu_set_speed_cap(NULL);
-			if (ret) {
-				cpu_clear(cpu, edp_cpumask);
-				edp_update_limit();
-			}
-
-			printk(KERN_DEBUG "tegra CPU:%sforce EDP limit %u kHz"
+			printk(KERN_DEBUG "cpu-tegra:%sforce EDP limit %u kHz"
 				"\n", ret ? " failed to " : " ", new_speed);
+		}
+		if (!ret)
+			ret = tegra_cpu_dvfs_alter(
+				edp_thermal_index, &edp_cpumask, false, event);
+		if (ret) {
+			cpu_clear(cpu, edp_cpumask);
+			edp_update_limit();
 		}
 		mutex_unlock(&tegra_cpu_lock);
 		break;
 	case CPU_DEAD:
 		mutex_lock(&tegra_cpu_lock);
 		cpu_clear(cpu, edp_cpumask);
+		tegra_cpu_dvfs_alter(
+			edp_thermal_index, &edp_cpumask, true, event);
 		edp_update_limit();
 		tegra_cpu_set_speed_cap(NULL);
 		mutex_unlock(&tegra_cpu_lock);
@@ -417,9 +507,6 @@ static int __init tegra_cpu_debug_init(void)
 	if (!cpu_tegra_debugfs_root)
 		return -ENOMEM;
 
-	if (tegra_throttle_debug_init(cpu_tegra_debugfs_root))
-		goto err_out;
-
 	if (tegra_edp_debug_init(cpu_tegra_debugfs_root))
 		goto err_out;
 
@@ -455,7 +542,7 @@ unsigned int tegra_getspeed(unsigned int cpu)
 	return rate;
 }
 
-static int tegra_update_cpu_speed(unsigned long rate)
+int tegra_update_cpu_speed(unsigned long rate)
 {
 	int ret = 0;
 	struct cpufreq_freqs freqs;
@@ -582,6 +669,20 @@ int tegra_cpu_set_speed_cap(unsigned int *speed_cap)
 	return ret;
 }
 
+int tegra_suspended_target(unsigned int target_freq)
+{
+	unsigned int new_speed = target_freq;
+
+	if (!is_suspended)
+		return -EBUSY;
+
+	/* apply only "hard" caps */
+	new_speed = tegra_throttle_governor_speed(new_speed);
+	new_speed = edp_governor_speed(new_speed);
+
+	return tegra_update_cpu_speed(new_speed);
+}
+
 static int tegra_target(struct cpufreq_policy *policy,
 		       unsigned int target_freq,
 		       unsigned int relation)
@@ -592,14 +693,6 @@ static int tegra_target(struct cpufreq_policy *policy,
 	int ret = 0;
 
 	mutex_lock(&tegra_cpu_lock);
-
-#if defined(CONFIG_ARCH_ACER_T30)
-	if (policy->cpu < 0 || policy->cpu > NR_CPUS - 1) {
-		pr_err("[tegra_target] CPU#%d was dead for updating freq.\r\n", policy->cpu);
-		mutex_unlock(&tegra_cpu_lock);
-		return -EBUSY;
-	}
-#endif
 
 	ret = cpufreq_frequency_table_target(policy, freq_table, target_freq,
 		relation, &idx);
@@ -754,6 +847,18 @@ static int __init tegra_cpufreq_init(void)
 	if (ret)
 		return ret;
 
+#if defined(CONFIG_ARCH_ACER_T30)
+	power_mode_kobj = kobject_create_and_add("dev-power_mode", NULL);
+	if (power_mode_kobj == NULL) {
+		pr_err("%s: subsystem_register failed\n", __FUNCTION__);
+	}
+	ret = sysfs_create_group(power_mode_kobj, &attr_group);
+
+	if(ret) {
+		pr_err("%s: sysfs_create_group failed, %d\n", __FUNCTION__, __LINE__);
+	}
+#endif
+
 	return cpufreq_register_driver(&tegra_cpufreq_driver);
 }
 
@@ -767,7 +872,11 @@ static void __exit tegra_cpufreq_exit(void)
 		&tegra_cpufreq_policy_nb, CPUFREQ_POLICY_NOTIFIER);
 }
 
-
+#if defined(CONFIG_ARCH_ACER_T30)
+module_param_array_named(performance_mode, performance_mode, uint, &performance_mode_size, 0660);
+module_param_array_named(balanced_mode, balanced_mode, uint, &balanced_mode_size, 0660);
+module_param_array_named(powersaving_mode, powersaving_mode, uint, &powersaving_mode_size, 0660);
+#endif
 MODULE_AUTHOR("Colin Cross <ccross@android.com>");
 MODULE_DESCRIPTION("cpufreq driver for Nvidia Tegra2");
 MODULE_LICENSE("GPL");

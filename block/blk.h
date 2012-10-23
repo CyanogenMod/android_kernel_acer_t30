@@ -15,7 +15,6 @@ void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
 			struct bio *bio);
 int blk_rq_append_bio(struct request_queue *q, struct request *rq,
 		      struct bio *bio);
-void blk_drain_queue(struct request_queue *q, bool drain_all);
 void blk_dequeue_request(struct request *rq);
 void __blk_queue_free_tags(struct request_queue *q);
 bool __blk_end_bidi_request(struct request *rq, int error,
@@ -64,6 +63,7 @@ static inline struct request *__elv_next_request(struct request_queue *q)
 			rq = list_entry_rq(q->queue_head.next);
 			return rq;
 		}
+
 		/*
 		 * Flush request is running and flush request isn't queueable
 		 * in the drive, we can hold the queue till flush request is

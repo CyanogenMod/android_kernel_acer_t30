@@ -49,7 +49,7 @@
 #endif
 
 #ifdef CONFIG_ACER_FM_SINGLE_MIC
-extern void mic_switch(struct tegra_wm8903_platform_data *pdata);
+extern void mic_switch(struct tegra_asoc_platform_data *pdata);
 extern void set_int_mic_state(bool state);
 extern void set_ext_mic_state(bool state);
 #ifdef CONFIG_MACH_PICASSO_E

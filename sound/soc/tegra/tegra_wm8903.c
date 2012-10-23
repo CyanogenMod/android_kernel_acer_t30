@@ -12,6 +12,8 @@
  * Author: Graeme Gregory
  *         graeme.gregory@wolfsonmicro.com or linux@wolfsonmicro.com
  *
+ * Copyright (c) 2012, NVIDIA CORPORATION. All rights reserved.
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
  * version 2 as published by the Free Software Foundation.
@@ -41,7 +43,7 @@
 #endif
 
 #if !defined(CONFIG_ARCH_ACER_T20) && !defined(CONFIG_ARCH_ACER_T30)
-#include <mach/tegra_wm8903_pdata.h>
+#include <mach/tegra_asoc_pdata.h>
 #endif
 
 #include <sound/core.h>
@@ -78,7 +80,7 @@
 
 struct tegra_wm8903 {
 	struct tegra_asoc_utils_data util_data;
-	struct tegra_wm8903_platform_data *pdata;
+	struct tegra_asoc_platform_data *pdata;
 	struct regulator *spk_reg;
 	struct regulator *dmic_reg;
 	int gpio_requested;
@@ -111,9 +113,9 @@ static int tegra_wm8903_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_codec *codec = rtd->codec;
 	struct snd_soc_card *card = codec->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 	int srate, mclk, i2s_daifmt;
 	int err;
-	struct clk *clk_m;
 	int rate;
 
 	srate = params_rate(params);
@@ -128,31 +130,17 @@ static int tegra_wm8903_hw_params(struct snd_pcm_substream *substream,
 		break;
 	}
 
+	if(pdata->i2s_param[HIFI_CODEC].is_i2s_master) {
+		/* FIXME: Codec only requires >= 3MHz if OSR==0 */
+		while (mclk < 6000000)
+			mclk *= 2;
 
-
-	clk_m = clk_get_sys(NULL, "clk_m");
-	if (IS_ERR(clk_m)) {
-		dev_err(card->dev, "Can't retrieve clk clk_m\n");
-		err = PTR_ERR(clk_m);
-		return err;
+		i2s_daifmt = SND_SOC_DAIFMT_NB_NF |
+					SND_SOC_DAIFMT_CBS_CFS;
+	} else {
+		i2s_daifmt = SND_SOC_DAIFMT_NB_NF |
+					SND_SOC_DAIFMT_CBM_CFM;
 	}
-	rate = clk_get_rate(clk_m);
-	printk("extern1 rate=%d\n",rate);
-
-#if TEGRA30_I2S_MASTER_PLAYBACK
-	/* FIXME: Codec only requires >= 3MHz if OSR==0 */
-	while (mclk < 6000000)
-		mclk *= 2;
-
-	i2s_daifmt = SND_SOC_DAIFMT_NB_NF |
-		     SND_SOC_DAIFMT_CBS_CFS;
-#else
-	mclk = rate;
-
-	i2s_daifmt = SND_SOC_DAIFMT_NB_NF |
-		     SND_SOC_DAIFMT_CBM_CFM;
-#endif
-
 
 	err = tegra_asoc_utils_set_rate(&machine->util_data, srate, mclk);
 	if (err < 0) {
@@ -166,13 +154,36 @@ static int tegra_wm8903_hw_params(struct snd_pcm_substream *substream,
 
 	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 1);
 
+	rate = clk_get_rate(machine->util_data.clk_cdev1);
+
 	/* Use DSP mode for mono on Tegra20 */
 	if ((params_channels(params) != 2) &&
-	    (machine_is_ventana() || machine_is_harmony() ||
-	    machine_is_kaen() || machine_is_aebl()))
+		(machine_is_ventana() || machine_is_harmony() ||
+		machine_is_kaen() || machine_is_aebl())) {
 		i2s_daifmt |= SND_SOC_DAIFMT_DSP_A;
-	else
-		i2s_daifmt |= SND_SOC_DAIFMT_I2S;
+	} else {
+		switch (pdata->i2s_param[HIFI_CODEC].i2s_mode) {
+			case TEGRA_DAIFMT_I2S :
+				i2s_daifmt |= SND_SOC_DAIFMT_I2S;
+				break;
+			case TEGRA_DAIFMT_DSP_A :
+				i2s_daifmt |= SND_SOC_DAIFMT_DSP_A;
+				break;
+			case TEGRA_DAIFMT_DSP_B :
+				i2s_daifmt |= SND_SOC_DAIFMT_DSP_B;
+				break;
+			case TEGRA_DAIFMT_LEFT_J :
+				i2s_daifmt |= SND_SOC_DAIFMT_LEFT_J;
+				break;
+			case TEGRA_DAIFMT_RIGHT_J :
+				i2s_daifmt |= SND_SOC_DAIFMT_RIGHT_J;
+				break;
+			default :
+				dev_err(card->dev,
+				"Can't configure i2s format\n");
+				return -EINVAL;
+		}
+	}
 
 	err = snd_soc_dai_set_fmt(codec_dai, i2s_daifmt);
 	if (err < 0) {
@@ -186,8 +197,7 @@ static int tegra_wm8903_hw_params(struct snd_pcm_substream *substream,
 		return err;
 	}
 
-	err = snd_soc_dai_set_sysclk(codec_dai, 0, mclk,
-					SND_SOC_CLOCK_IN);
+	err = snd_soc_dai_set_sysclk(codec_dai, 0, rate, SND_SOC_CLOCK_IN);
 	if (err < 0) {
 		dev_err(card->dev, "codec_dai clock not set\n");
 		return err;
@@ -219,10 +229,10 @@ static int tegra_bt_sco_hw_params(struct snd_pcm_substream *substream,
 					struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct snd_soc_card *card = rtd->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	int srate, mclk, min_mclk;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
+	int srate, mclk, min_mclk, i2s_daifmt;
 	int err;
 
 	srate = params_rate(params);
@@ -258,10 +268,32 @@ static int tegra_bt_sco_hw_params(struct snd_pcm_substream *substream,
 
 	tegra_asoc_utils_lock_clk_rate(&machine->util_data, 1);
 
-	err = snd_soc_dai_set_fmt(cpu_dai,
-					SND_SOC_DAIFMT_DSP_A |
-					SND_SOC_DAIFMT_NB_NF |
-					SND_SOC_DAIFMT_CBS_CFS);
+	i2s_daifmt = SND_SOC_DAIFMT_NB_NF;
+	i2s_daifmt |= pdata->i2s_param[BT_SCO].is_i2s_master ?
+			SND_SOC_DAIFMT_CBS_CFS : SND_SOC_DAIFMT_CBM_CFM;
+
+	switch (pdata->i2s_param[BT_SCO].i2s_mode) {
+		case TEGRA_DAIFMT_I2S :
+			i2s_daifmt |= SND_SOC_DAIFMT_I2S;
+			break;
+		case TEGRA_DAIFMT_DSP_A :
+			i2s_daifmt |= SND_SOC_DAIFMT_DSP_A;
+			break;
+		case TEGRA_DAIFMT_DSP_B :
+			i2s_daifmt |= SND_SOC_DAIFMT_DSP_B;
+			break;
+		case TEGRA_DAIFMT_LEFT_J :
+			i2s_daifmt |= SND_SOC_DAIFMT_LEFT_J;
+			break;
+		case TEGRA_DAIFMT_RIGHT_J :
+			i2s_daifmt |= SND_SOC_DAIFMT_RIGHT_J;
+			break;
+		default :
+			dev_err(card->dev, "Can't configure i2s format\n");
+			return -EINVAL;
+	}
+
+	err = snd_soc_dai_set_fmt(rtd->cpu_dai, i2s_daifmt);
 	if (err < 0) {
 		dev_err(card->dev, "cpu_dai fmt not set\n");
 		return err;
@@ -474,7 +506,7 @@ static int tegra_wm8903_event_int_spk(struct snd_soc_dapm_widget *w,
 	struct snd_soc_dapm_context *dapm = w->dapm;
 	struct snd_soc_card *card = dapm->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
 	wm8903_event_printf(__func__, event);
@@ -502,7 +534,7 @@ static int tegra_wm8903_event_hp(struct snd_soc_dapm_widget *w,
 	struct snd_soc_dapm_context *dapm = w->dapm;
 	struct snd_soc_card *card = dapm->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
 	wm8903_event_printf(__func__, event);
@@ -533,7 +565,7 @@ static int tegra_wm8903_event_int_mic(struct snd_soc_dapm_widget *w,
 	struct snd_soc_dapm_context *dapm = w->dapm;
 	struct snd_soc_card *card = dapm->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
 	wm8903_event_printf(__func__, event);
@@ -567,7 +599,7 @@ static int tegra_wm8903_event_ext_mic(struct snd_soc_dapm_widget *w,
 	struct snd_soc_dapm_context *dapm = w->dapm;
 	struct snd_soc_card *card = dapm->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
 	wm8903_event_printf(__func__, event);
@@ -603,7 +635,7 @@ static const struct snd_soc_dapm_widget cardhu_dapm_widgets[] = {
 static const struct snd_soc_dapm_widget cardhu_dapm_widgets[] = {
 	SND_SOC_DAPM_SPK("Int Spk", tegra_wm8903_event_int_spk),
 	SND_SOC_DAPM_HP("Headphone Jack", tegra_wm8903_event_hp),
-	SND_SOC_DAPM_LINE("Line Out", NULL),
+	SND_SOC_DAPM_LINE("LineOut", NULL),
 	SND_SOC_DAPM_MIC("Mic Jack", tegra_wm8903_event_ext_mic),
 	SND_SOC_DAPM_MIC("Int Mic", tegra_wm8903_event_int_mic),
 	SND_SOC_DAPM_LINE("Line In", NULL),
@@ -678,8 +710,8 @@ static const struct snd_soc_dapm_route cardhu_audio_map[] = {
 	{"Int Spk", NULL, "RON"},
 	{"Int Spk", NULL, "LOP"},
 	{"Int Spk", NULL, "LON"},
-	{"Line Out", NULL, "LINEOUTL"},
-	{"Line Out", NULL, "LINEOUTR"},
+	{"LineOut", NULL, "LINEOUTL"},
+	{"LineOut", NULL, "LINEOUTR"},
 	{"Mic Bias", NULL, "Mic Jack"},
 	{"IN1L", NULL, "Mic Bias"},
 	{"Mic Bias", NULL, "Int Mic"},
@@ -727,9 +759,11 @@ static const struct snd_kcontrol_new cardhu_controls[] = {
 	SOC_DAPM_PIN_SWITCH("LineOut"),
 	SOC_DAPM_PIN_SWITCH("Mic Jack"),
 	SOC_DAPM_PIN_SWITCH("Int Mic"),
-	SOC_DAPM_PIN_SWITCH("LineIn"),
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
+	SOC_DAPM_PIN_SWITCH("LineIn"),
 	SOC_DAPM_SET_PARAM("audio_source"),
+#else
+        SOC_DAPM_PIN_SWITCH("Line In"),
 #endif
 };
 
@@ -743,7 +777,7 @@ static int tegra_wm8903_init(struct snd_soc_pcm_runtime *rtd)
 	struct snd_soc_dapm_context *dapm = &codec->dapm;
 	struct snd_soc_card *card = codec->card;
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 	int ret;
 
 	machine->bias_level = SND_SOC_BIAS_STANDBY;
@@ -767,7 +801,7 @@ static int tegra_wm8903_init(struct snd_soc_pcm_runtime *rtd)
 		}
 		machine->gpio_requested |= GPIO_HP_MUTE;
 
-		gpio_direction_output(pdata->gpio_hp_mute, 0);
+		gpio_direction_output(pdata->gpio_hp_mute, 1);
 	}
 
 	if (gpio_is_valid(pdata->gpio_int_mic_en)) {
@@ -820,44 +854,6 @@ static int tegra_wm8903_init(struct snd_soc_pcm_runtime *rtd)
 
 	snd_soc_dapm_add_routes(dapm, cardhu_audio_map,
 			ARRAY_SIZE(cardhu_audio_map));
-#else
-	if (machine_is_cardhu() || machine_is_ventana()) {
-		ret = snd_soc_add_controls(codec, cardhu_controls,
-				ARRAY_SIZE(cardhu_controls));
-		if (ret < 0)
-			return ret;
-
-		snd_soc_dapm_new_controls(dapm, cardhu_dapm_widgets,
-				ARRAY_SIZE(cardhu_dapm_widgets));
-	}
-	else {
-		ret = snd_soc_add_controls(codec,
-				tegra_wm8903_default_controls,
-				ARRAY_SIZE(tegra_wm8903_default_controls));
-		if (ret < 0)
-			return ret;
-
-		snd_soc_dapm_new_controls(dapm,
-				tegra_wm8903_default_dapm_widgets,
-				ARRAY_SIZE(tegra_wm8903_default_dapm_widgets));
-	}
-
-	if (machine_is_harmony()) {
-		snd_soc_dapm_add_routes(dapm, harmony_audio_map,
-					ARRAY_SIZE(harmony_audio_map));
-	} else if (machine_is_cardhu() || machine_is_ventana()) {
-		snd_soc_dapm_add_routes(dapm, cardhu_audio_map,
-					ARRAY_SIZE(cardhu_audio_map));
-	} else if (machine_is_seaboard()) {
-		snd_soc_dapm_add_routes(dapm, seaboard_audio_map,
-					ARRAY_SIZE(seaboard_audio_map));
-	} else if (machine_is_kaen()) {
-		snd_soc_dapm_add_routes(dapm, kaen_audio_map,
-					ARRAY_SIZE(kaen_audio_map));
-	} else {
-		snd_soc_dapm_add_routes(dapm, aebl_audio_map,
-					ARRAY_SIZE(aebl_audio_map));
-	}
 #endif
 
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
@@ -901,6 +897,10 @@ static int tegra_wm8903_init(struct snd_soc_pcm_runtime *rtd)
 #endif
 	wm8903_mic_detect(codec, &tegra_wm8903_mic_jack, SND_JACK_MICROPHONE,
 			  machine_is_cardhu() ? SND_JACK_MICROPHONE : 0);
+
+	ret = tegra_asoc_utils_register_ctls(&machine->util_data);
+	if (ret < 0)
+		return ret;
 
 	snd_soc_dapm_force_enable_pin(dapm, "Mic Bias");
 
@@ -950,6 +950,7 @@ static int tegra_wm8903_init(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
+#ifdef WM8903_SET_BIAS_LEVEL
 static int tegra30_soc_set_bias_level(struct snd_soc_card *card,
 					enum snd_soc_bias_level level)
 {
@@ -975,6 +976,7 @@ static int tegra30_soc_set_bias_level_post(struct snd_soc_card *card,
 
 	return 0 ;
 }
+#endif
 
 static struct snd_soc_dai_link tegra_wm8903_dai[] = {
 	{
@@ -1007,10 +1009,37 @@ static struct snd_soc_dai_link tegra_wm8903_dai[] = {
 	},
 };
 
+static int tegra_wm8903_suspend_post(struct snd_soc_card *card)
+{
+	struct snd_soc_jack_gpio *gpio = &tegra_wm8903_hp_jack_gpio;
+
+	if (gpio_is_valid(gpio->gpio))
+		disable_irq(gpio_to_irq(gpio->gpio));
+
+	return 0;
+}
+
+static int tegra_wm8903_resume_pre(struct snd_soc_card *card)
+{
+	int val;
+	struct snd_soc_jack_gpio *gpio = &tegra_wm8903_hp_jack_gpio;
+
+	if (gpio_is_valid(gpio->gpio)) {
+		val = gpio_get_value(gpio->gpio);
+		val = gpio->invert ? !val : val;
+		snd_soc_jack_report(gpio->jack, val, gpio->report);
+		enable_irq(gpio_to_irq(gpio->gpio));
+	}
+
+	return 0;
+}
+
 static struct snd_soc_card snd_soc_tegra_wm8903 = {
 	.name = "tegra-wm8903",
 	.dai_link = tegra_wm8903_dai,
 	.num_links = ARRAY_SIZE(tegra_wm8903_dai),
+	.suspend_post = tegra_wm8903_suspend_post,
+	.resume_pre = tegra_wm8903_resume_pre,
 	//.set_bias_level = tegra30_soc_set_bias_level,
 	//.set_bias_level_post = tegra30_soc_set_bias_level_post,
 #if defined(CONFIG_ARCH_ACER_T20) || defined(CONFIG_ARCH_ACER_T30)
@@ -1023,7 +1052,7 @@ static __devinit int tegra_wm8903_driver_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &snd_soc_tegra_wm8903;
 	struct tegra_wm8903 *machine;
-	struct tegra_wm8903_platform_data *pdata;
+	struct tegra_asoc_platform_data *pdata;
 	int ret;
 
 	pdata = pdev->dev.platform_data;
@@ -1040,20 +1069,25 @@ static __devinit int tegra_wm8903_driver_probe(struct platform_device *pdev)
 
 	machine->pdata = pdata;
 
-	ret = tegra_asoc_utils_init(&machine->util_data, &pdev->dev);
+	ret = tegra_asoc_utils_init(&machine->util_data, &pdev->dev, card);
 	if (ret)
 		goto err_free_machine;
 
-	machine->spk_reg = regulator_get(&pdev->dev, "vdd_spk_amp");
-	if (IS_ERR(machine->spk_reg)) {
-		dev_info(&pdev->dev, "No speaker regulator found\n");
-		machine->spk_reg = 0;
+	if (machine_is_cardhu() || machine_is_ventana()) {
+		machine->spk_reg = regulator_get(&pdev->dev, "vdd_spk_amp");
+		if (IS_ERR(machine->spk_reg)) {
+			dev_info(&pdev->dev, "No speaker regulator found\n");
+			machine->spk_reg = 0;
+		}
 	}
 
-	machine->dmic_reg = regulator_get(&pdev->dev, "vdd_dmic");
-	if (IS_ERR(machine->dmic_reg)) {
-		dev_info(&pdev->dev, "No digital mic regulator found\n");
-		machine->dmic_reg = 0;
+	if (machine_is_ventana()) {
+		machine->dmic_reg = regulator_get(&pdev->dev, "vdd_dmic");
+		if (IS_ERR(machine->dmic_reg)) {
+			dev_info(&pdev->dev, "No digital mic"
+						" regulator found\n");
+			machine->dmic_reg = 0;
+		}
 	}
 
 #if defined(CONFIG_ARCH_ACER_T30)
@@ -1083,6 +1117,37 @@ static __devinit int tegra_wm8903_driver_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, card);
 	snd_soc_card_set_drvdata(card, machine);
 
+	if (machine_is_cardhu() || machine_is_ventana()) {
+		card->controls = cardhu_controls;
+		card->num_controls = ARRAY_SIZE(cardhu_controls);
+
+		card->dapm_widgets = cardhu_dapm_widgets;
+		card->num_dapm_widgets = ARRAY_SIZE(cardhu_dapm_widgets);
+	} else {
+		card->controls = tegra_wm8903_default_controls;
+		card->num_controls = ARRAY_SIZE(tegra_wm8903_default_controls);
+
+		card->dapm_widgets = tegra_wm8903_default_dapm_widgets;
+		card->num_dapm_widgets = ARRAY_SIZE(tegra_wm8903_default_dapm_widgets);
+	}
+
+	if (machine_is_harmony()) {
+		card->dapm_routes = harmony_audio_map;
+		card->num_dapm_routes = ARRAY_SIZE(harmony_audio_map);
+	} else if (machine_is_ventana() || machine_is_cardhu()) {
+		card->dapm_routes = cardhu_audio_map;
+		card->num_dapm_routes = ARRAY_SIZE(cardhu_audio_map);
+	} else if (machine_is_seaboard()) {
+		card->dapm_routes = seaboard_audio_map;
+		card->num_dapm_routes = ARRAY_SIZE(seaboard_audio_map);
+	} else if (machine_is_kaen()) {
+		card->dapm_routes = kaen_audio_map;
+		card->num_dapm_routes = ARRAY_SIZE(kaen_audio_map);
+	} else {
+		card->dapm_routes = aebl_audio_map;
+		card->num_dapm_routes = ARRAY_SIZE(aebl_audio_map);
+	}
+
 	ret = snd_soc_register_card(card);
 	if (ret) {
 		dev_err(&pdev->dev, "snd_soc_register_card failed (%d)\n",
@@ -1096,6 +1161,16 @@ static __devinit int tegra_wm8903_driver_probe(struct platform_device *pdev)
 			ret);
 		goto err_unregister_card;
 	}
+
+#ifndef CONFIG_ARCH_TEGRA_2x_SOC
+	ret = tegra_asoc_utils_set_parent(&machine->util_data,
+				pdata->i2s_param[HIFI_CODEC].is_i2s_master);
+	if (ret) {
+		dev_err(&pdev->dev, "tegra_asoc_utils_set_parent failed (%d)\n",
+			ret);
+		goto err_unregister_card;
+	}
+#endif
 
 	return 0;
 
@@ -1116,7 +1191,7 @@ static int __devexit tegra_wm8903_driver_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 	struct tegra_wm8903 *machine = snd_soc_card_get_drvdata(card);
-	struct tegra_wm8903_platform_data *pdata = machine->pdata;
+	struct tegra_asoc_platform_data *pdata = machine->pdata;
 
 	if (machine->gpio_requested & GPIO_HP_DET)
 		snd_soc_jack_free_gpios(&tegra_wm8903_hp_jack,

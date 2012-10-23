@@ -765,22 +765,6 @@ static enum hrtimer_restart tick_sched_timer(struct hrtimer *timer)
 	return HRTIMER_RESTART;
 }
 
-#if defined(CONFIG_ARCH_ACER_T30)
-static unsigned int tick_nohz_bits;
-void enable_tick_nohz(unsigned int bits, unsigned int cpu)
-{
-	if(bits==1)
-		tick_nohz_bits |= (bits << cpu);
-	else
-		tick_nohz_bits &= (!(1 << cpu));
-}
-
-int is_enable_tick_nohz()
-{
-	return tick_nohz_bits;
-}
-#endif
-
 /**
  * tick_setup_sched_timer - setup the tick emulation timer
  */
@@ -812,9 +796,6 @@ void tick_setup_sched_timer(void)
 	if (tick_nohz_enabled) {
 		ts->nohz_mode = NOHZ_MODE_HIGHRES;
 		printk(KERN_INFO "Switched to NOHz mode on CPU #%d\n", smp_processor_id());
-#if defined(CONFIG_ARCH_ACER_T30)
-		enable_tick_nohz(0, smp_processor_id());
-#endif
 	}
 #endif
 }

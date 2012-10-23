@@ -1,7 +1,7 @@
 #ifndef __ACER_AUDIO_COMMON_H__
 #define __ACER_AUDIO_COMMON_H__
 
-#include <mach/tegra_wm8903_pdata.h>
+#include <mach/tegra_asoc_pdata.h>
 #include <linux/delay.h>
 #include <sound/wm8903.h>
 

@@ -30,7 +30,11 @@ int arb_lost_recovery(int scl_gpio, int sda_gpio)
 	int ret;
 	int retry = RETRY_MAX_COUNT;
 	int recovered_successfully = 0;
+#if defined(CONFIG_ARCH_ACER_T30)
+	int scl_gpio_status = 0;
+#else
 	int val;
+#endif
 
 	if ((!scl_gpio) || (!sda_gpio)) {
 		pr_err("not proper input:scl_gpio 0x%08x,"
@@ -53,9 +57,53 @@ int arb_lost_recovery(int scl_gpio, int sda_gpio)
 		goto err;
 	}
 	tegra_gpio_enable(sda_gpio);
+#if defined(CONFIG_ARCH_ACER_T30)
+	if(gpio_get_value(sda_gpio)) {
+		gpio_direction_output(scl_gpio, 0);
+		udelay(5);
+		gpio_direction_output(sda_gpio, 0);
+		udelay(5);
+	}
+	gpio_direction_input(scl_gpio);
+	udelay(5);
 	gpio_direction_input(sda_gpio);
+	udelay(5);
+	if (gpio_get_value(scl_gpio)) {
+		if(gpio_get_value(sda_gpio)) {
+			recovered_successfully = 1;
+			goto rv_quit;
+		}
+		else {
+			scl_gpio_status = gpio_get_value(scl_gpio) ? 1 : 0;
+			gpio_direction_output(sda_gpio, 1);
+			udelay(50);
+			gpio_direction_input(sda_gpio);
+		}
+	}
+#else
+	gpio_direction_input(sda_gpio);
+#endif
 
 	while (retry--) {
+#if defined(CONFIG_ARCH_ACER_T30)
+		if (gpio_get_value(sda_gpio) && scl_gpio_status){
+			recovered_successfully = 1;
+			break;
+		}
+		gpio_direction_output(scl_gpio, 0);
+		udelay(5);
+		gpio_direction_output(sda_gpio, 0);
+		udelay(5);
+		gpio_direction_input(scl_gpio);
+		udelay(5);
+		if (!gpio_get_value(scl_gpio))
+			udelay(20);
+		if (!gpio_get_value(scl_gpio))
+			msleep(10);
+		scl_gpio_status = gpio_get_value(scl_gpio) ? 1 : 0;
+		gpio_direction_input(sda_gpio);
+		udelay(5);
+#else
 		gpio_direction_output(scl_gpio,0);
 		udelay(5);
 		gpio_direction_output(scl_gpio,1);
@@ -79,8 +127,12 @@ int arb_lost_recovery(int scl_gpio, int sda_gpio)
 			recovered_successfully = 1;
 			break;
 		}
+#endif
 	}
 
+#if defined(CONFIG_ARCH_ACER_T30)
+rv_quit:
+#endif
 	gpio_free(scl_gpio);
 	tegra_gpio_disable(scl_gpio);
 	gpio_free(sda_gpio);

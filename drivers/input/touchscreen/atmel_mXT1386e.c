@@ -13,7 +13,6 @@
 #include <linux/gpio.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-
 #include <linux/ioctl.h>
 #include <linux/miscdevice.h>
 
@@ -47,7 +46,8 @@
 #define TP_LDO_EN                             TEGRA_GPIO_PB0
 #define TP_RST                                TEGRA_GPIO_PI2
 #define TP_INT                                TEGRA_GPIO_PJ0
-#define sens_num (sizeof(sensitivity_ver_table) / sizeof(struct sensitvity_ver_mapping) - 1)
+
+#define ConfigUpdateFlag                      1
 
 struct point_data {
 	short Status;
@@ -67,15 +67,20 @@ static bool ConfigChecksumError = 0;
 static int reenter_count = 0;
 static int reenter_times = 6;
 
-/* The record of sensitivity */
-static u8 sens_buf[8] = {0};
-static u8 sens_val[1] = {0};
-static u16 sens_addr = 0;
-static bool sencheck = 0;
 /* Other parameters for touch events */
 static int i2cfail_esd = 0;
 static int LastUpdateID = 0;
 static struct sensitivity_mapping sensitivity_table[TOUCH_SENSITIVITY_SYMBOL_COUNT];
+
+static int PLUGGED_INFO = 0;
+static bool H = 0;       /* 0: HDMI PLUG IN  1: HDMI PLUG OUT */
+static bool B = 0;       /* 0: AC PLUG IN    1: AC PLUG OUT   */
+static bool S = 0;       /* H || B */
+static bool S_check = 0; /* Record the status of S */
+
+#if defined(CONFIG_MACH_PICASSO_MF)
+static bool bending_enable = 1;
+#endif
 
 u16 T05_OBJAddr; /* Message Processor Byte0 = ID, Byte1 = AddrL, Byte2 = AddrH */
 u16 T06_OBJAddr; /* Command Processor */
@@ -90,6 +95,7 @@ u16 T24_OBJAddr;
 u16 T27_OBJAddr;
 u16 T25_OBJAddr;
 u16 T28_OBJAddr;
+u16 T35_OBJAddr;
 u16 T37_OBJAddr;
 u16 T38_OBJAddr;
 u16 T40_OBJAddr;
@@ -104,8 +110,11 @@ u16 T52_OBJAddr;
 u16 T55_OBJAddr;
 u16 T56_OBJAddr;
 u16 T57_OBJAddr;
+u16 T65_OBJAddr;
 u16 MaxTableSize;
 u16 OBJTableSize;
+
+u32 checksum32 = 0;
 
 #define mxt_debug(level, ...) \
 	do { \
@@ -170,7 +179,15 @@ enum {
 	T54,
 	T55,
 	T56,
-	T57
+	T57,
+	T58,
+	T59,
+	T60,
+	T61,
+	T62,
+	T63,
+	T64,
+	T65
 };
 
 u8 OBJTable[40][6];
@@ -187,6 +204,7 @@ u8 T24OBJInf[4];
 u8 T25OBJInf[3];
 u8 T27OBJInf[3];
 u8 T28OBJInf[3];
+u8 T35OBJInf[3];
 u8 T37OBJInf[3];
 u8 T38OBJInf[3];
 u8 T40OBJInf[3];
@@ -201,6 +219,7 @@ u8 T52OBJInf[3];
 u8 T55OBJInf[3];
 u8 T56OBJInf[3];
 u8 T57OBJInf[3];
+u8 T65OBJInf[3];
 
 struct mxt_data
 {
@@ -208,6 +227,9 @@ struct mxt_data
 	struct input_dev     *input;
 	struct work_struct   init_dwork;
 	struct work_struct   touch_dwork;
+#if defined(CONFIG_MACH_PICASSO_MF)
+	struct delayed_work  bending_dwork;
+#endif
 	struct point_data    PointBuf[NUM_FINGERS];
 	int init_irq;
 	int touch_irq;
@@ -215,6 +237,7 @@ struct mxt_data
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	struct early_suspend early_suspend;
 #endif
+	struct mutex lock;
 };
 
 struct mxt_data *mxt;
@@ -230,6 +253,9 @@ static int ATMEL_Issleep(struct mxt_data *mxt);
 static int ATMEL_Resume(struct mxt_data *mxt);
 static int ATMEL_IsResume(struct mxt_data *mxt);
 static int ATMEL_Calibrate(struct mxt_data *mxt);
+#if defined(CONFIG_MACH_PICASSO_MF)
+static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch);
+#endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
 void mxt_early_suspend(struct early_suspend *h);
 void mxt_late_resume(struct early_suspend *h);
@@ -386,7 +412,6 @@ static void init_worker(struct work_struct *work)
 
 	if (mxt_read_block_wo_addr(mxt->client, 7, buffer) < 0) {
 		mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block_wo_addr failed\n");
-		goto next_irq;
 	}
 
 	if (debug == DEBUG_DETAIL) {
@@ -530,9 +555,16 @@ static void touch_worker(struct work_struct *work)
 		} else if (buffer[1] & 0x80) {
 			mxt->PointBuf[ContactID].Status = buffer[5];
 			mxt_debug(DEBUG_DETAIL, "Finger Touch!!\n");
+#if defined(CONFIG_MACH_PICASSO_MF)
+			if (bending_enable) {
+				mxt_debug(DEBUG_ERROR, "mXT1386E: enable lens bending\n");
+				bending_enable = 0;
+				schedule_delayed_work(&mxt->bending_dwork, msecs_to_jiffies(20000));
+			}
+#endif
 		} else if (buffer[1] & 0x02) {
 			mxt->PointBuf[ContactID].Status = 0;
-			mxt_debug(DEBUG_ERROR, "Palm Suppresion!!\n");
+			mxt_debug(DEBUG_ERROR, "mXT1386E: Palm Suppresion!!\n");
 		} else if (buffer[1] == 0x00) {
 			ContactID = 255;
 			mxt_debug(DEBUG_DETAIL, "this point is not touch or release\n");
@@ -582,6 +614,23 @@ next_irq:
 	return;
 }
 
+#if defined(CONFIG_MACH_PICASSO_MF)
+static void bending_worker(struct work_struct *work)
+{
+	struct mxt_data *mxt;
+
+	mxt = container_of(work, struct mxt_data, bending_dwork.work);
+
+	mxt_debug(DEBUG_ERROR, "\nmXT1386E: bending_worker\n");
+
+	if (ATMEL_Bending_On_Off(mxt, 1) < 0) {
+		mxt_debug(DEBUG_ERROR, "mXT1386E: Bending Enable failed\n");
+		return;
+	}
+
+	return;
+}
+#endif
 
 static irqreturn_t init_irq_handler(int irq, void *init_mxt)
 {
@@ -777,11 +826,12 @@ static ssize_t sensitivity_store(struct kobject *kobj, struct kobj_attribute *at
 	}
 	sen_value[0] = sensitivity_table[symbol].value;
 
+	mxt_debug(DEBUG_ERROR, "mXT1386E: symbol: %d\n", symbol);
+
 	CalculateAddr16bits(T09OBJInf[2], T09OBJInf[1], &sens_addr16, 7);
 	if (mxt_write_block(mxt->client, sens_addr16, 1, sen_value) < 0)
 		mxt_debug(DEBUG_ERROR, "sensitivity_store fail\n");
-	if (ATMEL_Backup(mxt) < 0)
-		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Backup failed\n");
+
 	mxt_debug(DEBUG_ERROR, "sensitivity_table[%d]: %d\n", symbol, sensitivity_table[symbol].value);
 	return n;
 }
@@ -809,12 +859,90 @@ static ssize_t filter_store(struct kobject *kobj, struct kobj_attribute *attr, c
 		if (mxt_write_block(mxt->client, addr, 3, filter_value) < 0)
 			mxt_debug(DEBUG_ERROR, "filter_store fail\n");
 	} else {
-		filter_value[0] = 5;
-		filter_value[1] = 5;
-		filter_value[2] = 32;
+		filter_value[0] = T09OBJ[11];
+		filter_value[1] = T09OBJ[12];
+		filter_value[2] = T09OBJ[13];
 		if (mxt_write_block(mxt->client, addr, 3, filter_value) < 0)
 			mxt_debug(DEBUG_ERROR, "filter_store fail\n");
 	}
+	return n;
+}
+
+static ssize_t plugged_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+	mxt_debug(DEBUG_ERROR, "mXT1386E: touch_worker S: %d\n", S);
+	if (S == 0) {
+		return sprintf(buf, "mXT1386E: No plugged\n");
+	} else {
+		if (B == 0) {
+			return sprintf(buf, "mXT1386E: HDMI plugged\n");
+		} else {
+			if(H == 0) {
+				return sprintf(buf, "mXT1386E: AC plugged\n");
+			} else {
+				return sprintf(buf, "mXT1386E: AC and HDMI plugged\n");
+			}
+		}
+	}
+}
+
+static ssize_t plugged_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+{
+	u8 di_value[1];
+	u16 di_addr16;
+
+	mutex_lock(&mxt->lock);
+
+	PLUGGED_INFO = myatoi(buf);
+
+	mxt_debug(DEBUG_BASIC, "mXT1386E: PLUGGED_INFO: %d\n", PLUGGED_INFO);
+	mxt_debug(DEBUG_BASIC, "mXT1386E: S: %d B: %d H: %d\n", S, B, H);
+
+	if (PLUGGED_INFO == 0) {
+		H = 0;
+		if((B == 0) && ( S == 1)) {
+			S = 0;
+		}
+	} else if (PLUGGED_INFO == 1) {
+		H = 1;
+		if(S == 0) {
+			S = 1;
+		}
+	} else if (PLUGGED_INFO == 2) {
+		B = 0;
+		if((H == 0) && ( S == 1)) {
+			S = 0;
+		}
+	} else if (PLUGGED_INFO == 3) {
+		B = 1;
+		if(S == 0) {
+			S = 1;
+		}
+	} else {
+		mxt_debug(DEBUG_ERROR, "mXT1386E: Unknown number: %d\n", PLUGGED_INFO);
+	}
+
+	mxt_debug(DEBUG_BASIC, "mXT1386E: S: %d\n", S);
+#if defined(CONFIG_MACH_PICASSO_MF)
+	if(S != S_check) {
+		if(S) {
+			mxt_debug(DEBUG_ERROR, "mXT1386E: update DI 2 to 4\n");
+			CalculateAddr16bits(T09OBJInf[2], T09OBJInf[1], &di_addr16, 8);
+			di_value[0] = 4;
+			S_check = 1;
+			if (mxt_write_block(mxt->client, di_addr16, 1, di_value) < 0)
+				mxt_debug(DEBUG_ERROR, "di_value_store fail\n");
+		} else {
+			mxt_debug(DEBUG_ERROR, "mXT1386E: update DI 4 to 2\n");
+			CalculateAddr16bits(T09OBJInf[2], T09OBJInf[1], &di_addr16, 8);
+			di_value[0] = T09OBJ[8];
+			S_check = 0;
+			if (mxt_write_block(mxt->client, di_addr16, 1, di_value) < 0)
+				mxt_debug(DEBUG_ERROR, "di_value_store fail\n");
+		}
+	}
+#endif
+	mutex_unlock(&mxt->lock);
 	return n;
 }
 
@@ -822,21 +950,30 @@ static ssize_t FirmwareVersion_show(struct kobject *kobj, struct kobj_attribute 
 {
 	char *s = buf;
 	int fw_version = 0;
-	int cf_version = 0;
 
 	fw_version = Firmware_Info;
 	fw_version <<= 4;
 	fw_version |= Reseved_Firmware_Info;
-	cf_version = ConfigVersion;
-	cf_version <<= 4;
-	cf_version |= Reseved_ConfigVersion;
-	cf_version <<= 4;
-	cf_version |= Reservedinfo;
-	s += sprintf(s, "%s%s-%X-%X\n", Chip_Vendor, Reseved_Chip_Vendor, fw_version, cf_version);
+
+	s += sprintf(s, "%s%s-%X-%X\n", Chip_Vendor, Reseved_Chip_Vendor, fw_version, checksum32);
+	return (s - buf);
+}
+
+static ssize_t firmware_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+	char *s = buf;
+	int fw_version = 0;
+
+	fw_version = Firmware_Info;
+	fw_version <<= 4;
+	fw_version |= Reseved_Firmware_Info;
+
+	s += sprintf(s, "%s%s-%X-%X\n", Chip_Vendor, Reseved_Chip_Vendor, fw_version, checksum32);
 	return (s - buf);
 }
 
 static struct kobject *touchdebug_kobj;
+static struct kobject *touchdebug_kobj_info;
 
 #define debug_attr(_name) \
 	static struct kobj_attribute _name##_attr = { \
@@ -863,6 +1000,7 @@ debug_attr(val);
 debug_attr(debugmsg);
 debug_attr(sensitivity);
 debug_attr(filter);
+debug_attr(plugged);
 
 static struct attribute * g[] = {
 	&hbyte_attr.attr,
@@ -872,12 +1010,33 @@ static struct attribute * g[] = {
 	&debugmsg_attr.attr,
 	&sensitivity_attr.attr,
 	&filter_attr.attr,
+	&plugged_attr.attr,
 	&FirmwareVersion_attr.attr,
+	NULL,
+};
+
+#define touch_attr(_name) \
+static struct kobj_attribute _name##_attr = { \
+	.attr = { \
+	.name = __stringify(_name), \
+	.mode = 0644, \
+	}, \
+	.show = _name##_show, \
+}
+
+touch_attr(firmware);
+
+static struct attribute * g_info[] = {
+	&firmware_attr.attr,
 	NULL,
 };
 
 static struct attribute_group attr_group = {
 	.attrs = g,
+};
+
+static struct attribute_group attr_group_info = {
+	.attrs = g_info,
 };
 /* SYSFS_END */
 
@@ -962,8 +1121,14 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 	u8 *buffer;
 	u8 T07_VAL[3] = {0}, T08_VAL[10] = {0}, T09_VAL[35] = {0}, T18_VAL[2] = {0};
 	u8 T24_VAL[19] = {0}, T25_VAL[6] = {0}, T27_VAL[7] = {0}, T38_VAL[64] = {0};
-	u8 T40_VAL[5] = {0}, T42_VAL[10] = {0}, T43_VAL[7] = {0}, T46_VAL[9] = {0};
-	u8 T47_VAL[10] = {0}, T48_VAL[54] = {0}, T56_VAL[43] = {0};
+	u8 T40_VAL[5] = {0}, T42_VAL[10] = {0}, T46_VAL[9] = {0};
+	u8 T47_VAL[10] = {0}, T48_VAL[54] = {0};
+#if defined(CONFIG_MACH_PICASSO_MF)
+	u8 T43_VAL[11] = {0}, T56_VAL[51] = {0}, T35_VAL[12] = {0}, T65_VAL[17] = {0};
+#else
+	u8 T43_VAL[7] = {0}, T56_VAL[43] = {0};
+#endif
+
 	u8 i, z, Value;
 	u32 Cal_crc = 0, InternalCRC;
 	buffer = kzalloc(sizeof(u8)*MaxTableSize + 1, GFP_KERNEL);
@@ -1030,14 +1195,17 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 	ATMEL_CalOBJ_ID_Addr(T18, T18OBJInf);
 	CalculateAddr16bits(T18OBJInf[2], T18OBJInf[1], &T18_OBJAddr, 0);
 
-	ATMEL_CalOBJ_ID_Addr(T24, T25OBJInf);
-	CalculateAddr16bits(T24OBJInf[2], T24OBJInf[1], &T24_OBJAddr, 0);
+	ATMEL_CalOBJ_ID_Addr(T24, T24OBJInf);
+	CalculateAddr16bits(T24OBJInf[3], T24OBJInf[2], &T24_OBJAddr, 0);
 
 	ATMEL_CalOBJ_ID_Addr(T25, T25OBJInf);
 	CalculateAddr16bits(T25OBJInf[2], T25OBJInf[1], &T25_OBJAddr, 0);
 
 	ATMEL_CalOBJ_ID_Addr(T27, T27OBJInf);
 	CalculateAddr16bits(T27OBJInf[2], T27OBJInf[1], &T27_OBJAddr, 0);
+
+	ATMEL_CalOBJ_ID_Addr(T35, T35OBJInf);
+	CalculateAddr16bits(T35OBJInf[2], T35OBJInf[1], &T35_OBJAddr, 0);
 
 	ATMEL_CalOBJ_ID_Addr(T38, T38OBJInf);
 	CalculateAddr16bits(T38OBJInf[2], T38OBJInf[1], &T38_OBJAddr, 0);
@@ -1062,6 +1230,9 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 
 	ATMEL_CalOBJ_ID_Addr(T56, T56OBJInf);
 	CalculateAddr16bits(T56OBJInf[2], T56OBJInf[1], &T56_OBJAddr, 0);
+
+	ATMEL_CalOBJ_ID_Addr(T65, T65OBJInf);
+	CalculateAddr16bits(T65OBJInf[2], T65OBJInf[1], &T65_OBJAddr, 0);
 
 	if (debug == DEBUG_DETAIL) {
 		mxt_debug(DEBUG_DETAIL, "Seperate Table\n");
@@ -1099,8 +1270,8 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 				T19OBJInf[2], T19OBJInf[1], T19OBJInf[0], T19_OBJAddr);
 
 		mxt_debug(DEBUG_DETAIL, "T24\n");
-		mxt_debug(DEBUG_DETAIL, "T24[2]:0x%x, T24[1]:0x%x, T24[0]:0x%x T24:0x%x\n",
-				T24OBJInf[2], T24OBJInf[1], T24OBJInf[0], T24_OBJAddr);
+		mxt_debug(DEBUG_DETAIL, "T24[3]:0x%x T24[2]:0x%x, T24[1]:0x%x, T24[0]:0x%x T24:0x%x\n",
+				T24OBJInf[3], T24OBJInf[2], T24OBJInf[1], T24OBJInf[0], T24_OBJAddr);
 
 		mxt_debug(DEBUG_DETAIL, "T25\n");
 		mxt_debug(DEBUG_DETAIL, "T25[2]:0x%x, T25[1]:0x%x, T25[0]:0x%x T25:0x%x\n",
@@ -1109,6 +1280,10 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 		mxt_debug(DEBUG_DETAIL, "T27\n");
 		mxt_debug(DEBUG_DETAIL, "T27[2]:0x%x, T27[1]:0x%x, T27[0]:0x%x T27:0x%x\n",
 				T27OBJInf[2], T27OBJInf[1], T27OBJInf[0], T27_OBJAddr);
+
+		mxt_debug(DEBUG_DETAIL, "T35\n");
+		mxt_debug(DEBUG_DETAIL, "T35[2]:0x%x, T35[1]:0x%x, T35[0]:0x%x T35:0x%x\n",
+				T35OBJInf[2], T35OBJInf[1], T35OBJInf[0], T35_OBJAddr);
 
 		mxt_debug(DEBUG_DETAIL, "T38\n");
 		mxt_debug(DEBUG_DETAIL, "T38[2]:0x%x, T38[1]:0x%x, T38[0]:0x%x T38:0x%x\n",
@@ -1141,6 +1316,10 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 		mxt_debug(DEBUG_DETAIL, "T56\n");
 		mxt_debug(DEBUG_DETAIL, "T56[2]:0x%x, T56[1]:0x%x, T56[0]:0x%x T56:0x%x\n",
 				T56OBJInf[2], T56OBJInf[1], T56OBJInf[0], T56_OBJAddr);
+
+		mxt_debug(DEBUG_DETAIL, "T65\n");
+		mxt_debug(DEBUG_DETAIL, "T65[2]:0x%x, T65[1]:0x%x, T65[0]:0x%x T65:0x%x\n",
+				T65OBJInf[2], T65OBJInf[1], T65OBJInf[0], T65_OBJAddr);
 
 		if (mxt_read_block(mxt->client, T07_OBJAddr, 3, T07_VAL) < 0)
 			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
@@ -1192,11 +1371,6 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 		for(i=0;i<10;i++)
 			mxt_debug(DEBUG_DETAIL, " T42[%d] 0x%x\n", i, T42_VAL[i]);
 
-		if (mxt_read_block(mxt->client, T43_OBJAddr,  7, T43_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<7;i++)
-			mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
-
 		if (mxt_read_block(mxt->client, T46_OBJAddr, 9, T46_VAL) < 0)
 			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
 		for(i=0;i<9;i++)
@@ -1212,11 +1386,38 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 		for(i=0;i<54;i++)
 			mxt_debug(DEBUG_DETAIL, " T48[%d] 0x%x\n", i, T48_VAL[i]);
 
+#if defined(CONFIG_MACH_PICASSO_MF)
+		if (mxt_read_block(mxt->client, T43_OBJAddr, 11, T43_VAL) < 0)
+			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+		for(i=0;i<11;i++)
+			mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
+
+		if (mxt_read_block(mxt->client, T56_OBJAddr, 51, T56_VAL) < 0)
+			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+		for(i=0;i<51;i++)
+			mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
+
+		if (mxt_read_block(mxt->client, T35_OBJAddr, 12, T35_VAL) < 0)
+			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+		for(i=0;i<12;i++)
+			mxt_debug(DEBUG_DETAIL, " T35[%d] 0x%x\n", i, T35_VAL[i]);
+
+		if (mxt_read_block(mxt->client, T65_OBJAddr, 17, T65_VAL) < 0)
+			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+		for(i=0;i<17;i++)
+			mxt_debug(DEBUG_DETAIL, " T65[%d] 0x%x\n", i, T65_VAL[i]);
+
+#else
+		if (mxt_read_block(mxt->client, T43_OBJAddr, 7, T43_VAL) < 0)
+			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+		for(i=0;i<7;i++)
+			mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
+
 		if (mxt_read_block(mxt->client, T56_OBJAddr, 43, T56_VAL) < 0)
 			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
 		for(i=0;i<43;i++)
 			mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
-
+#endif
 	}
 	kfree(buffer);
 
@@ -1274,6 +1475,31 @@ static int ATMEL_Calibrate(struct mxt_data *mxt)
 	return 0;
 }
 
+#if defined(CONFIG_MACH_PICASSO_MF)
+static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch)
+{
+	u8 val[1] = {0};
+	u8 bending[1] = {0};
+
+	mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Bending_On_Off: %d\n", cfg_switch);
+	val[0] = cfg_switch;
+
+	if (mxt_write_block(mxt->client, T65_OBJAddr, 1, val) < 0) {
+		mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_write_block fail\n");
+		return -1;
+	}
+
+	if (mxt_read_block(mxt->client, T65_OBJAddr, 1, bending) < 0) {
+		mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block fail\n");
+		return -1;
+	}
+
+	mxt_debug(DEBUG_ERROR, "\nmXT1386E: cfg_enable: %d\n", bending[0]);
+
+	return 0;
+}
+#endif
+
 static int ATMEL_WriteConfig(struct mxt_data *mxt)
 {
 	mxt_debug(DEBUG_DETAIL, "mXT1386E: ATMEL_WriteConfig\n");
@@ -1308,9 +1534,6 @@ static int ATMEL_WriteConfig(struct mxt_data *mxt)
 	if (mxt_write_block(mxt->client, T42_OBJAddr, 10, T42OBJ) < 0)
 		return -1;
 
-	if (mxt_write_block(mxt->client, T43_OBJAddr,  7, T43OBJ) < 0)
-		return -1;
-
 	if (acer_board_type == BOARD_PICASSO_M) {
 		if (mxt_write_block(mxt->client, T46_OBJAddr,  9, T46OBJ) < 0)
 			return -1;
@@ -1333,8 +1556,25 @@ static int ATMEL_WriteConfig(struct mxt_data *mxt)
 	if (mxt_write_block(mxt->client, T48_OBJAddr, 54, T48OBJ) < 0)
 		return -1;
 
+#if defined(CONFIG_MACH_PICASSO_MF)
+	if (mxt_write_block(mxt->client, T43_OBJAddr, 11, T43OBJ) < 0)
+		return -1;
+
+	if (mxt_write_block(mxt->client, T56_OBJAddr, 51, T56OBJ) < 0)
+		return -1;
+
+	if (mxt_write_block(mxt->client, T35_OBJAddr, 12, T35OBJ) < 0)
+		return -1;
+
+	if (mxt_write_block(mxt->client, T65_OBJAddr, 17, T65OBJ) < 0)
+		return -1;
+#else
+	if (mxt_write_block(mxt->client, T43_OBJAddr, 7, T43OBJ) < 0)
+		return -1;
+
 	if (mxt_write_block(mxt->client, T56_OBJAddr, 43, T56OBJ) < 0)
 		return -1;
+#endif
 
 	return 0;
 }
@@ -1371,62 +1611,30 @@ static int ATMEL_ConfigRecovery(struct mxt_data *mxt)
 
 static int ATMEL_ConfigcheckCRC(struct mxt_data *mxt)
 {
-	u8 val[1] = {1};
-	u16 addr16;
-	u32 checksum32;
-	int i, j;
-	int check_config = 1;
-
 	mxt_debug(DEBUG_DETAIL, "mXT1386E: ATMEL_ConfigcheckCRC\n");
-
-	CalculateAddr16bits(T06OBJInf[2],T06OBJInf[1], &addr16, 3);
-	if (mxt_write_block(mxt->client, addr16, 1, val) < 0)
-		return -1;
 
 	checksum32 = checksum[2];
 	checksum32 = (checksum32 << 8) + checksum[1];
 	checksum32 = (checksum32 << 8) + checksum[0];
 
-	mxt_debug(DEBUG_ERROR, "mXT1386E: sens_num: %d\n", sens_num);
-	for(j=0; j<TOUCH_SENSITIVITY_SYMBOL_COUNT; j++) {
-		mxt_debug(DEBUG_ERROR,"mXT1386E: checksum should be %d\n",
-			sensitivity_ver_table[sens_num].sens_ver_mapping[j].checksum_config);
-	}
+	mxt_debug(DEBUG_DETAIL,"mXT1386E: checksum should be %d\n", ConfigChecksum);
 
-	for(j=0; j<TOUCH_SENSITIVITY_SYMBOL_COUNT; j++) {
-		if (checksum32 == sensitivity_ver_table[sens_num].sens_ver_mapping[j].checksum_config) {
-			mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is %8d\n", checksum32);
-			mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is right\n");
-			mxt_debug(DEBUG_ERROR,"mXT1386E: Now sensitivity:%2d\n", sens_val[0]);
-			check_config = 0;
-			ConfigChecksumError = 0;
-			break;
-		}
-	}
-
-	/* Mapping sensitivity level by the checksum. */
-	if (check_config) {
+	if (checksum32 == ConfigChecksum) {
 		mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is %8d\n", checksum32);
-		mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is error\n");
-		for( i=0; i < sens_num; i++) {
-			for(j=0; j<TOUCH_SENSITIVITY_SYMBOL_COUNT; j++) {
-				if(sensitivity_ver_table[i].sens_ver_mapping[j].value == sens_val[0]) {
-					if(sensitivity_ver_table[i].sens_ver_mapping[j].checksum_config == checksum32) {
-						sens_val[0] =  sensitivity_ver_table[sens_num].sens_ver_mapping[j].value;
-						mxt_debug(DEBUG_ERROR,"mXT1386E: [%d][%d]sensitivity should be %2d\n", i, j, sens_val[0]);
-						break;
-					}
-				}
-			}
+		mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is the same as ConfigChecksum\n");
+		ConfigChecksumError = 0;
+	} else {
+		mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is %8d\n", checksum32);
+		mxt_debug(DEBUG_ERROR,"mXT1386E: Now checksum is different ConfigChecksum\n");
+		if (ConfigUpdateFlag) {
+			mxt_debug(DEBUG_ERROR,"mXT1386E: Configurations should be updated\n");
+			ConfigChecksumError = 1;
+		} else {
+			mxt_debug(DEBUG_ERROR,"mXT1386E: Configurations will not be updated\n");
+			ConfigChecksumError = 0;
 		}
-		/* If it can't be mapped and it will use the default value */
-		if (i == sens_num) {
-			sens_val[0] =  sensitivity_ver_table[sens_num].sens_ver_mapping[TOUCH_SENSITIVITY_SYMBOL_DEFAULT].value;
-			mxt_debug(DEBUG_ERROR,"mXT1386E: sensitivity should be default %2d\n", sens_val[0]);
-		}
-		ConfigChecksumError = 1;
-
 	}
+
 	return 0;
 }
 
@@ -1454,23 +1662,6 @@ static int ATMEL_Touch_Init(struct mxt_data *mxt)
 
 	mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Touch_Init\n");
 
-	CalculateAddr16bits(T09OBJInf[2], T09OBJInf[1], &sens_addr, 7);
-	if (mxt_write_block(mxt->client, sens_addr, 1, sens_val) < 0)
-		mxt_debug(DEBUG_ERROR, "Write T09OBJInf fail\n");
-
-	mxt_debug(DEBUG_ERROR,"mXT1386E: Write sensitivity value: %d\n", sens_val[0]);
-
-	if (ATMEL_Backup(mxt) < 0) {
-		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Backup failed\n");
-		return -1;
-	}
-
-	if (ATMEL_Reset(mxt) < 0) {
-		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Reset failed\n");
-		return -1;
-	}
-
-	mdelay(200);
 	free_irq(mxt->init_irq, mxt);
 
 	error = request_irq(mxt->touch_irq,
@@ -1498,15 +1689,6 @@ static int ATMEL_Init_OBJ(struct mxt_data *mxt)
 	if (ATMEL_CheckOBJTableCRC(mxt) < 0) {
 		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_CheckOBJTableCRC failed\n");
 		return -1;
-	}
-
-	/* Read the sensitivity value */
-	if (sencheck == 0) {
-		if (mxt_read_block(mxt->client, T09_OBJAddr, 8, sens_buf) < 0)
-			mxt_debug(DEBUG_ERROR, "Read T09_OBJAddr fail\n");
-		sens_val[0] = sens_buf[7];
-		sencheck = 1;
-		mxt_debug(DEBUG_ERROR, "Read sensitivity value: %d\n",sens_buf[7]);
 	}
 
 	return 0;
@@ -1666,11 +1848,6 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	mxt_debug(DEBUG_DETAIL, "mXT1386E: mxt_probe\n");
 
-	for(i=0; i<TOUCH_SENSITIVITY_SYMBOL_COUNT; i++) {
-		sensitivity_table[i] = sensitivity_ver_table[sens_num].sens_ver_mapping[i];
-		mxt_debug(DEBUG_ERROR, "mXT1386E: sensitivity[%d] = %d\n", i, sensitivity_table[i].value);
-	}
-
 	if (client == NULL) {
 		mxt_debug(DEBUG_ERROR, "mXT1386E: client == NULL\n");
 		return	-EINVAL;
@@ -1710,7 +1887,9 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	INIT_WORK(&mxt->init_dwork, init_worker);
 	INIT_WORK(&mxt->touch_dwork, touch_worker);
-
+#if defined(CONFIG_MACH_PICASSO_MF)
+	INIT_DELAYED_WORK(&mxt->bending_dwork, bending_worker);
+#endif
 	set_bit(EV_ABS, input->evbit);
 
 	set_bit(ABS_MT_TOUCH_MAJOR, input->keybit);
@@ -1765,7 +1944,17 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	if (error)
 		mxt_debug(DEBUG_ERROR, "%s: sysfs_create_group failed, %d\n", __FUNCTION__, __LINE__);
 
+	touchdebug_kobj_info = kobject_create_and_add("dev-info_touch", NULL);
+	if (touchdebug_kobj_info == NULL)
+		mxt_debug(DEBUG_ERROR, "%s: subsystem_register failed\n", __FUNCTION__);
+
+	error = sysfs_create_group(touchdebug_kobj_info, &attr_group_info);
+	if (error)
+		mxt_debug(DEBUG_ERROR, "%s: sysfs_create_group failed, %d\n", __FUNCTION__, __LINE__);
+
 	/* SYSFS_END */
+
+	mutex_init(&mxt->lock);
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	mxt->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
@@ -1816,11 +2005,17 @@ void mxt_early_suspend(struct early_suspend *h)
 	mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_early_suspend\n");
 
 	disable_irq(data->touch_irq);
+	cancel_delayed_work(&data->bending_dwork);
 	cancel_work_sync(&data->touch_dwork);
 	/*
 	system will still go to suspend if i2c error,
 	but it will be blocked if sleep configs are not written to touch successfully
 	*/
+#if defined(CONFIG_MACH_PICASSO_MF)
+	bending_enable = 1;
+	if (ATMEL_Bending_On_Off(data, 0) < 0)
+		mxt_debug(DEBUG_ERROR, "mXT1386E: Bending Disable failed\n");
+#endif
 	if (ATMEL_Deepsleep(data) == 0) {
 		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL_Deepsleep OK!\n");
 	} else {
@@ -1850,10 +2045,8 @@ void mxt_late_resume(struct early_suspend *h)
 		ret = ATMEL_IsResume(data);
 		mxt_debug(DEBUG_ERROR, "mXT1386E: ATMEL Resume Fail: %d\n", ret);
 	}
-
 	if (ATMEL_Calibrate(data) < 0)
 		mxt_debug(DEBUG_ERROR, "mXT1386E: calibration failed\n");
-
 	enable_irq(data->touch_irq);
 }
 #endif

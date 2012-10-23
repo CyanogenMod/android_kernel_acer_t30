@@ -98,12 +98,13 @@ config TOUCHSCREEN_ATMEL_MXT
 	  To compile this driver as a module, choose M here: the
 	  module will be called atmel_mxt_ts.
 
-config TOUCHSCREEN_ATMEL_768E
-	tristate "Atmel Touchscreen Interface"
+config TOUCHSCREEN_ATMEL_MXT1386E
+	tristate "Atmel_mXT1386 Touchscreen Interface"
 	depends on I2C
+	default n
 	help
 	  To compile this driver as a module, choose M here: the
-	  module will be called atmel_768e.
+	  module will be called atmel_mxt1386e.
 
 config TOUCHSCREEN_BITSY
 	tristate "Compaq iPAQ H3600 (Bitsy) touchscreen"
@@ -254,6 +255,18 @@ config TOUCHSCREEN_LPC32XX
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called lpc32xx_ts.
+
+config TOUCHSCREEN_MAX11801
+	tristate "MAX11801 based touchscreens"
+	depends on I2C
+	help
+	  Say Y here if you have a MAX11801 based touchscreen
+	  controller.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called max11801_ts.
 
 config TOUCHSCREEN_MCS5000
 	tristate "MELFAS MCS-5000 touchscreen"
@@ -432,14 +445,6 @@ config TOUCHSCREEN_ATMEL_TSADCC
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called atmel_tsadcc.
-
-config TOUCHSCREEN_ATMEL_MXT1386E
-	tristate "Atmel_mXT1386 Touchscreen Interface"
-	depends on I2C
-	default n
-	help
-	  To compile this driver as a module, choose M here: the
-	  module will be called atmel_mxt1386e.
 
 config TOUCHSCREEN_UCB1400
 	tristate "Philips UCB1400 touchscreen"
@@ -774,9 +779,10 @@ config TOUCHSCREEN_SYN_RMI4_SPI
 	  module will be called rmi-spi.
 
 config TOUCHSCREEN_FT5816
-        tristate "FocalTech Touchscreen Interface"
-        depends on I2C
-        help
-          To compile this driver as a module, choose M here: the
-          module will be called FT5816.
+	tristate "FocalTech Touchscreen Interface"
+	depends on I2C
+	help
+	  To compile this driver as a module, choose M here: the
+	  module will be called FT5816.
+
 endif

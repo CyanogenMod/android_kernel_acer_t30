@@ -20,11 +20,6 @@
 
 #define DEBUG 0
 
-#if defined(BYPASS_SWITCH_ENABLE)
-static void bypass_disable_delay_work(struct work_struct *work);
-static DECLARE_DELAYED_WORK(bypass_disable_wq, bypass_disable_delay_work);
-#endif
-
 static int execute_cmdmsg(unsigned int);
 static ssize_t config_wakeup_gpio(void);
 static void es305_set_uart_tx(int on);
@@ -73,13 +68,6 @@ static struct tegra_pingroup_config ES_305_GPIO_MODE[] = {
 #define AUDIENCE_A1026_NAME "audience_a1026"
 
 extern void acer_set_bypass_switch(int state);
-
-#if defined(BYPASS_SWITCH_ENABLE)
-static void bypass_disable_delay_work(struct work_struct *work)
-{
-	acer_set_bypass_switch(0);
-}
-#endif
 
 int a1026_i2c_read(char *rxData, int length)
 {
@@ -438,14 +426,18 @@ static int a1026_open(struct inode *inode, struct file *file)
 
 	mutex_lock(&a1026_lock);
 
+#if DISABLE_A1026_TOOLS_PERMISSION
 	if (a1026_opened) {
 		pr_err("%s: busy\n", __func__);
 		rc = -EBUSY;
 		goto done;
 	}
+#endif
 
 	a1026_opened = 1;
+#if DISABLE_A1026_TOOLS_PERMISSION
 done:
+#endif
 	mutex_unlock(&a1026_lock);
 	return rc;
 }
@@ -484,9 +476,7 @@ static ssize_t a1026_uart_sync_command(void)
 		goto set_suspend_err;
 	}
 
-#if !defined(BYPASS_SWITCH_ENABLE)
 	acer_set_bypass_switch(0);
-#endif
 
 set_suspend_err:
 set_sync_err:
@@ -591,6 +581,9 @@ static ssize_t a1026_set_config(int newid)
 			rc = execute_cmdmsg(SOUNDHOUND_EXTMIC);
 			break;
 		case A1026_TABLE_ES305_PLAYBACK:
+			if ((a1026_current_config == A1026_TABLE_VOIP_INTMIC) ||
+			    (a1026_current_config == A1026_TABLE_VOIP_EXTMIC))
+			    a1026_i2c_sw_reset(ES305_SW_RESET);
 			rc = execute_cmdmsg(ES305_PLAYBACK);
 			break;
 		case A1026_TABLE_CTS:
@@ -609,11 +602,6 @@ static ssize_t a1026_set_config(int newid)
 	a1026_current_config = newid;
 	pr_info("%s: change to mode %d\n", __func__, newid);
 
-#if defined(BYPASS_SWITCH_ENABLE)
-	if (!a1026_suspended || (rc < 0))
-		schedule_delayed_work(&bypass_disable_wq, BYPASS_DISABLED_TIME);
-#endif
-
 input_err:
 	return rc;
 }
@@ -622,22 +610,12 @@ static ssize_t a1026_suspend_es305(void)
 {
 	int rc = 0;
 
-#if defined(BYPASS_SWITCH_ENABLE)
-	/* Pass by bypass switch */
-	rc = execute_cmdmsg(A1026_msg_Sync);
-	if (rc < 0) {
-		pr_err("%s: sync command error %d\n", __func__, rc);
-		goto set_bypass_err;
-	}
-	acer_set_bypass_switch(1);
-#else
 	/* pass throgh From Port A to Port C */
 	rc = execute_cmdmsg(PassThrough_A_to_C);
 	if (rc) {
 		pr_err("%s: pass through command error\n", __func__);
 		goto set_bypass_err;
 	}
-#endif
 
 	/* Put A1026 into sleep mode */
 	rc = execute_cmdmsg(A1026_msg_Sleep);
@@ -667,6 +645,9 @@ static long a1026_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int rc = 0;
 	int pathid = 0;
 	unsigned NoiseLevelValue = 0;
+	unsigned WideningModeValue = 0;
+	unsigned WideningGainValue = 0;
+
 #if ENABLE_DIAG_IOCTLS
 	char msg[4];
 #endif
@@ -711,6 +692,34 @@ static long a1026_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			if (rc < 0)
 				pr_err("%s: A1026_NOISE_LEVEL (%d) error %d!\n",
 					__func__, NoiseLevelValue, rc);
+			break;
+		case A1026_WIDENING_MODE:
+			if (copy_from_user(&WideningModeValue, argp, sizeof(WideningModeValue)))
+				return -EFAULT;
+
+			rc = execute_cmdmsg(WIDENING_MODE_COMMAND);
+			if (rc < 0)
+				pr_err("%s: A1026_WIDENING_MODE (%x) error %d!\n",
+					__func__, WideningModeValue, rc);
+
+			rc = execute_cmdmsg(WideningModeValue);
+			if (rc < 0)
+				pr_err("%s: A1026_WIDENING_MODE (%x) error %d!\n",
+					__func__, WideningModeValue, rc);
+			break;
+		case A1026_WIDENING_GAIN:
+			if (copy_from_user(&WideningGainValue, argp, sizeof(WideningGainValue)))
+				return -EFAULT;
+
+			rc = execute_cmdmsg(WIDENING_GAIN_COMMAND);
+			if (rc < 0)
+				pr_err("%s: A1026_WIDENING_GAIN (%x) error %d!\n",
+					__func__, WideningGainValue, rc);
+
+			rc = execute_cmdmsg(WideningGainValue);
+			if (rc < 0)
+				pr_err("%s: A1026_WIDENING_GAIN (%x) error %d!\n",
+					__func__, WideningGainValue, rc);
 			break;
 #if ENABLE_DIAG_IOCTLS
 		case A1026_SYNC_CMD:
@@ -822,11 +831,18 @@ err_alloc_data_failed:
 
 static int a1026_remove(struct i2c_client *client)
 {
+	gpio_free(a1026_data.pdata->gpio_a1026_wakeup);
+	gpio_free(a1026_data.pdata->gpio_a1026_reset);
+	gpio_free(a1026_data.pdata->gpio_a1026_clk);
+	kfree(a1026_data.pdata);
+
 	return 0;
 }
 
 static int a1026_suspend(struct i2c_client *client, pm_message_t mesg)
 {
+	chk_wakeup_a1026();
+	a1026_suspend_es305();
 	return 0;
 }
 
@@ -869,7 +885,6 @@ static int __init a1026_init(void)
 
 static void __exit a1026_exit(void)
 {
-	kfree(a1026_data.pdata);
 	i2c_del_driver(&a1026_driver);
 }
 
