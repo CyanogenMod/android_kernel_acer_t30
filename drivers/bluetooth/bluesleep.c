@@ -384,18 +384,6 @@ static int bluesleep_hci_event(struct notifier_block *this,
 			bluesleep_start();
 		}
 		break;
-	case HCI_DEV_UP:
-#if BT_ENABLE_IRQ_WAKE
-		if (enable_irq_wake(bsi->host_wake_irq))
-			BT_ERR("Couldn't enable BT_HOST_WAKE as wakeup interrupt");
-#endif
-		break;
-	case HCI_DEV_DOWN:
-#if BT_ENABLE_IRQ_WAKE
-		if (disable_irq_wake(bsi->host_wake_irq))
-			BT_ERR("Couldn't disable hostwake IRQ wakeup mode\n");
-#endif
-		break;
 	case HCI_DEV_UNREG:
 		bluesleep_stop();
 		bluesleep_hdev = NULL;
@@ -489,6 +477,13 @@ static int bluesleep_start(void)
 		set_bit(BT_EXT_WAKE, &flags);
 	}
 
+#if BT_ENABLE_IRQ_WAKE
+	if (enable_irq_wake(bsi->host_wake_irq)) {
+		BT_ERR("Couldn't enable BT_HOST_WAKE as wakeup interrupt");
+		goto fail;
+	}
+#endif
+
 	set_bit(BT_PROTO, &flags);
 	return 0;
 fail:
@@ -526,6 +521,11 @@ static void bluesleep_stop(void)
 
 	atomic_inc(&open_count);
 	spin_unlock_irqrestore(&rw_lock, irq_flags);
+
+#if BT_ENABLE_IRQ_WAKE
+	if (disable_irq_wake(bsi->host_wake_irq))
+		BT_ERR("Couldn't disable hostwake IRQ wakeup mode\n");
+#endif
 }
 /**
  * Read the <code>BT_WAKE</code> GPIO pin value via the proc interface.
