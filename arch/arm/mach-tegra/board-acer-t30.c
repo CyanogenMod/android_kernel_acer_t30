@@ -273,6 +273,12 @@ static struct resource cardhu_bcm4329_rfkill_resources[] = {
 		.end    = TEGRA_GPIO_PP2,
 		.flags  = IORESOURCE_IO,
 	},
+	{
+		.name   = "bcm4329_ext_wake_gpio",
+		.start  = TEGRA_GPIO_PS7,
+		.end    = TEGRA_GPIO_PS7,
+		.flags  = IORESOURCE_IO,
+	},
 };
 
 static struct platform_device cardhu_bcm4329_rfkill_device = {

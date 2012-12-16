@@ -305,15 +305,9 @@ static int bluesleep_write_proc_lpm(struct file *file, const char *buffer,
 		bluesleep_stop();
 		has_lpm_enabled = false;
 		bsi->uport = NULL;
-#if defined(CONFIG_ARCH_ACER_T30)
-		gpio_set_value(bsi->ext_wake, 0);
-#endif
 	} else {
 		/* HCI_DEV_REG */
 		if (!has_lpm_enabled) {
-#if defined(CONFIG_ARCH_ACER_T30)
-			gpio_set_value(bsi->ext_wake, 1);
-#endif
 			has_lpm_enabled = true;
 			bsi->uport = bluesleep_get_uart_port();
 			/* if bluetooth started, start bluesleep*/
@@ -369,9 +363,6 @@ static int bluesleep_hci_event(struct notifier_block *this,
 
 	switch (event) {
 	case HCI_DEV_REG:
-#if defined(CONFIG_ARCH_ACER_T30)
-		gpio_set_value(bsi->ext_wake, 1);
-#endif
 		if (!bluesleep_hdev) {
 			bluesleep_hdev = hdev;
 			if (bsi->has_ext_wake == 1) {
@@ -388,9 +379,6 @@ static int bluesleep_hci_event(struct notifier_block *this,
 		bluesleep_stop();
 		bluesleep_hdev = NULL;
 		bsi->uport = NULL;
-#if defined(CONFIG_ARCH_ACER_T30)
-		gpio_set_value(bsi->ext_wake, 0);
-#endif
 		/* if bluetooth stopped, stop bluesleep also */
 		break;
 	case HCI_DEV_WRITE:

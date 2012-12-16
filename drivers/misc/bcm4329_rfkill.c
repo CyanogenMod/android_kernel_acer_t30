@@ -47,6 +47,9 @@ struct bcm4329_rfkill_data {
 	int gpio_wifi_reset;
 	int gpio_bcm_vdd;
 #endif
+#if defined(CONFIG_ARCH_ACER_T30)
+    int gpio_ext_wake;
+#endif
 };
 
 static struct bcm4329_rfkill_data *bcm4329_rfkill;
@@ -201,6 +204,13 @@ static int bcm4329_bt_rfkill_set_power(void *data, bool blocked)
 	if (blocked) {
 		pr_info("%s: BT Power off.\n", __func__);
 
+#if defined(CONFIG_ARCH_ACER_T30)
+		if (bcm4329_rfkill->gpio_ext_wake) {
+			gpio_direction_output(bcm4329_rfkill->gpio_ext_wake, 0);
+			pr_info("%s: bcm4329_rfkill->gpio_ext_wake = 0.\n", __func__);
+		}
+#endif
+
 		if (bcm4329_rfkill->gpio_shutdown) {
 			gpio_direction_output(bcm4329_rfkill->gpio_shutdown, 0);
 			pr_info("%s: bcm4329_rfkill->gpio_shutdown = 0.\n", __func__);
@@ -341,6 +351,18 @@ static int bcm4329_rfkill_probe(struct platform_device *pdev)
 	} else {
 		pr_warn("%s : can't find bcm_vdd gpio.\n", __func__);
 		bcm4329_rfkill->gpio_bcm_vdd = 0;
+	}
+#endif
+
+#if defined(CONFIG_ARCH_ACER_T30)
+	res = platform_get_resource_byname(pdev, IORESOURCE_IO,
+			"bcm4329_ext_wake_gpio");
+	if (res) {
+		bcm4329_rfkill->gpio_ext_wake = res->start;
+		gpio_set_value(bcm4329_rfkill->gpio_ext_wake, 0);
+	} else {
+		pr_warn("%s : can't find ext_wake gpio.\n", __func__);
+		bcm4329_rfkill->gpio_ext_wake = 0;
 	}
 #endif
 	/* make sure at-least one of the GPIO is defined */
