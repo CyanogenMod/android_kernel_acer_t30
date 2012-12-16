@@ -284,9 +284,6 @@ static struct platform_device cardhu_bcm4329_rfkill_device = {
 
 static noinline void __init cardhu_bcm4329_bt_rfkill(void)
 {
-	/*Add Clock Resource*/
-	clk_add_alias("bcm4329_32k_clk", cardhu_bcm4329_rfkill_device.name, \
-				"blink", NULL);
 	disable_bt_uart_func();
 	bt_shutdown_pin_init();
 	return;
