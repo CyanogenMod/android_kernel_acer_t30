@@ -27,14 +27,10 @@ extern int acer_board_type;
 #define ABS(x) ((x) < 0 ? -(x) : (x))
 #endif
 
-enum {
-	TOUCH_SENSITIVITY_SYMBOL_HIGH = 0,
-	TOUCH_SENSITIVITY_SYMBOL_MEDIUM,
-	TOUCH_SENSITIVITY_SYMBOL_LOW,
-	TOUCH_SENSITIVITY_SYMBOL_COUNT,
-};
-
-#define TOUCH_SENSITIVITY_SYMBOL_DEFAULT TOUCH_SENSITIVITY_SYMBOL_MEDIUM
+// Stock: high = 65, medium = 70, low = 75
+#define TOUCH_SENSITIVITY_MIN 45
+#define TOUCH_SENSITIVITY_MAX 75
+#define TOUCH_SENSITIVITY_DEFAULT 70
 
 /* GEN_POWERCONFIG_T7 INSTANCE 0 */
 u8 T07OBJ[3]  = {  15, 255,  10};
@@ -112,16 +108,5 @@ u8 T56OBJ[51] = {   1,   0,   1,  48,  21,  21,  21,  21,  21,  21,
 /* PROCI_LENSBENDING_T65 INSTATNCE 0 */
 u8 T65OBJ[17] = {   0,  75,   0,   0,   0,   0,   0,   0,   0,   0,
                    55,   0,   0,   0,   0,   0,   0};
-
-struct sensitivity_mapping {
-	int symbol;
-	u8 value;
-};
-
-static struct sensitivity_mapping sensitivity_table[] = {
-	{TOUCH_SENSITIVITY_SYMBOL_HIGH,           65},
-	{TOUCH_SENSITIVITY_SYMBOL_MEDIUM,         70},
-	{TOUCH_SENSITIVITY_SYMBOL_LOW,            75},
-};
 
 #endif /* _LINUX_MXT1386E_PMF_H */

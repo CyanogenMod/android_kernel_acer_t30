@@ -70,7 +70,6 @@ static int reenter_times = 6;
 /* Other parameters for touch events */
 static int i2cfail_esd = 0;
 static int LastUpdateID = 0;
-static struct sensitivity_mapping sensitivity_table[TOUCH_SENSITIVITY_SYMBOL_COUNT];
 
 static int PLUGGED_INFO = 0;
 static bool H = 0;       /* 0: HDMI PLUG IN  1: HDMI PLUG OUT */
@@ -782,57 +781,33 @@ static ssize_t debugmsg_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return n;
 }
 
-static ssize_t sensitivity_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+static ssize_t sensitivity_raw_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
 {
-	int i = 0;
-	int symbol = -1;
-	unsigned int delta = ~0;
-	unsigned int diff = 0;
 	u8 sens_buffer[8] = {0};
 
 	if (mxt_read_block(mxt->client, T09_OBJAddr, 8, sens_buffer) < 0)
 		return sprintf(buf, "fail\n");
-	for(i = 0; i < TOUCH_SENSITIVITY_SYMBOL_COUNT; i++) {
-		if (sensitivity_table[i].value == sens_buffer[7]) {
-			symbol = sensitivity_table[i].symbol;
-			break;
-		}
-		diff = ABS((int)sensitivity_table[i].value - (int)sens_buffer[7]);
-		if (diff < delta) {
-			symbol = sensitivity_table[i].symbol;
-			delta = diff;
-		}
-	}
-	return sprintf(buf, "%d\n", symbol);
+
+	return sprintf(buf, "%d\n", (int)sens_buffer[7]);
 }
 
-static ssize_t sensitivity_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+static ssize_t sensitivity_raw_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
 {
 	int flags = myatoi(buf);
-	int i = 0;
-	int symbol = -1;
 	u8 sen_value[1] = {0};
 	u16 sens_addr16;
 
-	for(i = 0; i < TOUCH_SENSITIVITY_SYMBOL_COUNT; i++) {
-		if (sensitivity_table[i].symbol == flags) {
-			symbol = sensitivity_table[i].symbol;
-			break;
-		}
-	}
-	if (symbol == -1) {
+	if (flags < TOUCH_SENSITIVITY_MIN || flags > TOUCH_SENSITIVITY_MAX) {
 		mxt_debug(DEBUG_ERROR, "the flags of touch sensitivity is not invalid\n");
-		symbol = TOUCH_SENSITIVITY_SYMBOL_DEFAULT;
+		return n;
 	}
-	sen_value[0] = sensitivity_table[symbol].value;
-
-	mxt_debug(DEBUG_ERROR, "mXT1386E: symbol: %d\n", symbol);
+	sen_value[0] = (u8)flags;
 
 	CalculateAddr16bits(T09OBJInf[2], T09OBJInf[1], &sens_addr16, 7);
 	if (mxt_write_block(mxt->client, sens_addr16, 1, sen_value) < 0)
 		mxt_debug(DEBUG_ERROR, "sensitivity_store fail\n");
 
-	mxt_debug(DEBUG_ERROR, "sensitivity_table[%d]: %d\n", symbol, sensitivity_table[symbol].value);
+	mxt_debug(DEBUG_ERROR, "sensitivity_store: %d\n", flags);
 	return n;
 }
 
@@ -998,7 +973,7 @@ debug_attr(lbyte);
 debug_attr(rlen);
 debug_attr(val);
 debug_attr(debugmsg);
-debug_attr(sensitivity);
+debug_attr(sensitivity_raw);
 debug_attr(filter);
 debug_attr(plugged);
 
@@ -1008,7 +983,7 @@ static struct attribute * g[] = {
 	&rlen_attr.attr,
 	&val_attr.attr,
 	&debugmsg_attr.attr,
-	&sensitivity_attr.attr,
+	&sensitivity_raw_attr.attr,
 	&filter_attr.attr,
 	&plugged_attr.attr,
 	&FirmwareVersion_attr.attr,
