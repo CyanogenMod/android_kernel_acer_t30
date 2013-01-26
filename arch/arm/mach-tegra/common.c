@@ -759,6 +759,11 @@ static int __init hw_ver_arg(char *options)
 	 */
 
 	acer_board_type  = (hw_ver & 0xf00) >> 8;
+
+	/* dirty hack to force Picasso M board */
+#if defined(CONFIG_MACH_PICASSO_M)
+	acer_board_type  = BOARD_PICASSO_M;
+#endif
 	acer_board_id    = (hw_ver & 0xf0) >> 4;
 	sku_type         = (hw_ver & 0x1);
 	acer_wifi_module = (hw_ver & 0x2) >> 1;
