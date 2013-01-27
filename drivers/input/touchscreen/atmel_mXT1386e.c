@@ -77,7 +77,7 @@ static bool B = 0;       /* 0: AC PLUG IN    1: AC PLUG OUT   */
 static bool S = 0;       /* H || B */
 static bool S_check = 0; /* Record the status of S */
 
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 static bool bending_enable = 1;
 #endif
 
@@ -226,7 +226,7 @@ struct mxt_data
 	struct input_dev     *input;
 	struct work_struct   init_dwork;
 	struct work_struct   touch_dwork;
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 	struct delayed_work  bending_dwork;
 #endif
 	struct point_data    PointBuf[NUM_FINGERS];
@@ -252,7 +252,7 @@ static int ATMEL_Issleep(struct mxt_data *mxt);
 static int ATMEL_Resume(struct mxt_data *mxt);
 static int ATMEL_IsResume(struct mxt_data *mxt);
 static int ATMEL_Calibrate(struct mxt_data *mxt);
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch);
 #endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -554,7 +554,7 @@ static void touch_worker(struct work_struct *work)
 		} else if (buffer[1] & 0x80) {
 			mxt->PointBuf[ContactID].Status = buffer[5];
 			mxt_debug(DEBUG_DETAIL, "Finger Touch!!\n");
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 			if (bending_enable) {
 				mxt_debug(DEBUG_ERROR, "mXT1386E: enable lens bending\n");
 				bending_enable = 0;
@@ -613,7 +613,7 @@ next_irq:
 	return;
 }
 
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 static void bending_worker(struct work_struct *work)
 {
 	struct mxt_data *mxt;
@@ -898,7 +898,7 @@ static ssize_t plugged_store(struct kobject *kobj, struct kobj_attribute *attr, 
 	}
 
 	mxt_debug(DEBUG_BASIC, "mXT1386E: S: %d\n", S);
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 	if(S != S_check) {
 		if(S) {
 			mxt_debug(DEBUG_ERROR, "mXT1386E: update DI 2 to 4\n");
@@ -1450,7 +1450,7 @@ static int ATMEL_Calibrate(struct mxt_data *mxt)
 	return 0;
 }
 
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch)
 {
 	u8 val[1] = {0};
@@ -1862,7 +1862,7 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	INIT_WORK(&mxt->init_dwork, init_worker);
 	INIT_WORK(&mxt->touch_dwork, touch_worker);
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 	INIT_DELAYED_WORK(&mxt->bending_dwork, bending_worker);
 #endif
 	set_bit(EV_ABS, input->evbit);
@@ -1986,7 +1986,7 @@ void mxt_early_suspend(struct early_suspend *h)
 	system will still go to suspend if i2c error,
 	but it will be blocked if sleep configs are not written to touch successfully
 	*/
-#if defined(CONFIG_MACH_PICASSO_MF)
+#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
 	bending_enable = 1;
 	if (ATMEL_Bending_On_Off(data, 0) < 0)
 		mxt_debug(DEBUG_ERROR, "mXT1386E: Bending Disable failed\n");
