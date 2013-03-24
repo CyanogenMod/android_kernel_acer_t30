@@ -524,7 +524,7 @@ static ssize_t BTMAC_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 		char bdaddr[LENGTH_BT_MAC];
 		Read_Data(bdaddr, ADDR_BT_MAC, LENGTH_BT_MAC);
 		return sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
-			bdaddr[0], bdaddr[1], bdaddr[2], bdaddr[3], bdaddr[4], bdaddr[5], bdaddr[6]);
+			bdaddr[0], bdaddr[1], bdaddr[2], bdaddr[3], bdaddr[4], bdaddr[5]);
 	}
 	return 0;
 }
