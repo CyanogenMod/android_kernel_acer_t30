@@ -58,6 +58,8 @@
 #define STANDBY 1
 #endif
 
+#define MPU_CHIP_CHECK_METHOD 0
+
 /*---------------------*/
 /*-    Prototypes.    -*/
 /*---------------------*/
@@ -476,6 +478,8 @@ struct prod_rev_map_t {
 };
 
 #define OLDEST_PROD_REV_SUPPORTED	11
+
+#if MPU_CHIP_CHECK_METHOD
 static struct prod_rev_map_t prod_rev_map[] = {
 	{0, 0},
 	{MPU_SILICON_REV_A4, 131},	/* 1  A? OBSOLETED */
@@ -505,6 +509,7 @@ static struct prod_rev_map_t prod_rev_map[] = {
 	{MPU_SILICON_REV_B6, 0},	/* 25 |  */
 	{MPU_SILICON_REV_B6, 131},	/* 26 V  (B6/A11) */
 };
+#endif
 
 /**
  *  @internal
@@ -524,6 +529,7 @@ static struct prod_rev_map_t prod_rev_map[] = {
 static int inv_get_silicon_rev_mpu3050(
 		struct mldl_cfg *mldl_cfg, void *mlsl_handle)
 {
+#if MPU_CHIP_CHECK_METHOD
 	int result;
 	unsigned char index = 0x00;
 	unsigned char bank =
@@ -564,6 +570,13 @@ static int inv_get_silicon_rev_mpu3050(
 	}
 
 	return result;
+#else
+	mldl_cfg->product_revision = 26;
+	mldl_cfg->silicon_revision = MPU_SILICON_REV_B6;
+	mldl_cfg->gyro_sens_trim = 131;
+
+	return 0;
+#endif
 }
 #define inv_get_silicon_rev inv_get_silicon_rev_mpu3050
 

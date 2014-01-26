@@ -170,6 +170,9 @@ struct usb_serial {
 	struct kref			kref;
 	struct mutex			disc_mutex;
 	void				*private;
+#if defined(CONFIG_ARCH_ACER_T30)
+	struct delayed_work work;
+#endif
 };
 #define to_usb_serial(d) container_of(d, struct usb_serial, kref)
 

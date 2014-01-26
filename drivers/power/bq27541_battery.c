@@ -46,8 +46,8 @@ extern int acer_board_type;
 extern bool throttle_start;
 #endif
 
-#define RELEASED_DATE			"2012/07/17"
-#define DRIVER_VERSION			"1.6.7"
+#define RELEASED_DATE			"2012/08/28"
+#define DRIVER_VERSION			"1.7.0"
 
 #ifdef CONFIG_BATTERY_BQ27541
 
@@ -1036,6 +1036,11 @@ int bq27541_battery_check(int arg)
 	ret = bat_i2c_read(BQ27541_REG_SOC, &rsoc, 0, di);
 	msleep(20);
 
+	if (ret < 0) {
+		dev_err(di->dev, "error reading battery_check\n");
+		rsoc = old_rsoc;
+	}
+
 	switch (arg) {
 	case 1:
 		return rsoc;
@@ -1074,19 +1079,31 @@ int bq27541_low_temp_check(void)
 
 	ret = bat_i2c_read(BQ27541_REG_SOC, &rsoc, 0, di);
 	msleep(20);
+
+	if(ret < 0){
+		dev_err(di->dev, "error reading low_temp_check rsoc\n");
+		return REPORT_NORMAL_VAL;
+	}
+
 	ret = bat_i2c_read(BQ27541_REG_TEMP, &temp, 0, di);
 	msleep(20);
 
-	if((rsoc > 40) && (temp < 2744) && (temp > 2647))
-		return RSOC_NOT_QUALIFY;
-	else if((rsoc <= 40) && (temp <= 2744) && (temp > 2647))
-		return TEMP_UNDER_ZERO;
-	else if((rsoc > 60) && (temp < 2647))
-		return RSOC_NOT_QUALIFY;
-	else if((rsoc <= 60) && (temp <= 2647))
-		return TEMP_UNDER_NAT_TEN;
-	else
+	if(ret < 0){
+		dev_err(di->dev, "error reading low_temp_check temp\n");
 		return REPORT_NORMAL_VAL;
+	}
+	else{
+		if((rsoc > 40) && (temp < 2744) && (temp > 2647))
+			return RSOC_NOT_QUALIFY;
+		else if((rsoc <= 40) && (temp <= 2744) && (temp > 2647))
+			return TEMP_UNDER_ZERO;
+		else if((rsoc > 60) && (temp < 2647))
+			return RSOC_NOT_QUALIFY;
+		else if((rsoc <= 60) && (temp <= 2647))
+			return TEMP_UNDER_NAT_TEN;
+		else
+			return REPORT_NORMAL_VAL;
+	}
 }
 EXPORT_SYMBOL(bq27541_low_temp_check);
 
@@ -1122,18 +1139,18 @@ static int bq27541_battery_temperature(struct bq27541_device_info *di)
 {
 	int ret;
 	int temp = 0;
-	int report = temp - 2731;
+	int report = 0;
 
 	ret = bat_i2c_read(BQ27541_REG_TEMP, &temp, 0, di);
 	msleep(20);
-
 	report = temp - 2731;
-	bat_temp = report;
+
 	if (ret < 0) {
 		dev_err(di->dev, "error reading temperature\n");
-		return ret;
+		return bat_temp;
 	}
 
+	bat_temp = report;
 	if((report == 0) || (report > 680)){
 		dev_err(di->dev, "1st error temperature value\n");
 		ret = bat_i2c_read(BQ27541_REG_TEMP, &temp, 0, di);
@@ -1207,7 +1224,7 @@ static int bq27541_battery_rsoc(struct bq27541_device_info *di)
 
 	if (ret < 0) {
 		dev_err(di->dev, "error reading relative State-of-Charge\n");
-		return ret;
+		return old_rsoc;
 	}
 
 	Capacity = rsoc;
@@ -1486,6 +1503,7 @@ static int bq27541_read_i2c(u8 reg, int *rt_value, int b_single,
 
 		msg[1].flags = I2C_M_RD;
 		err = i2c_transfer(client->adapter, msg, 2);
+
 		if (err >= 0) {
 			if (!b_single)
 				*rt_value = get_unaligned_le16(data);

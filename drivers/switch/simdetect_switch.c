@@ -201,12 +201,34 @@ static int simdet_switch_probe(struct platform_device *pdev)
 		goto err_register_switch;
 	}
 
-    // For SIM detect pin
+	// For ThreeG wakeup pin
+	if (threegwake_data == NULL) {
+		threegwake_data = kzalloc(sizeof(struct threegwake_data), GFP_KERNEL);
+		if (!threegwake_data)
+			return -ENOMEM;
+	}
+
+	threegwake_data->gpio = TEGRA_GPIO_PC7;
+	threegwake_data->irq = gpio_to_irq(TEGRA_GPIO_PC7);
+
+	printk("simdetect: 3G_WAKE irq is %d\n", threegwake_data->irq);
+	if (threegwake_data->irq < 0) {
+		ret = threegwake_data->irq;
+		goto err_detect_irq_num_failed;
+	}
+
 	tegra_gpio_enable(switch_data->gpio);
+	tegra_gpio_enable(threegwake_data->gpio);
 
 	ret = gpio_request(switch_data->gpio, pdev->name);
 	if (ret < 0) {
 		printk("simdetect: gpio_request failed");
+		goto err_request_gpio;
+	}
+
+	ret = gpio_request(threegwake_data->gpio, "3G_WAKE");
+	if (ret < 0) {
+		printk("simdetect: TRGRA_GPIO_PC7 gpio_request failed");
 		goto err_request_gpio;
 	}
 
@@ -216,7 +238,15 @@ static int simdet_switch_probe(struct platform_device *pdev)
 		goto err_set_gpio_input;
 	}
 
+	ret = gpio_direction_input(threegwake_data->gpio);
+	if (ret < 0) {
+		printk("simdetect: TEGRA_GPIO_PC7 gpio_direction_input failed");
+		goto err_set_gpio_input;
+	}
+
 	INIT_WORK(&switch_data->work, simdet_switch_work);
+
+	INIT_WORK(&threegwake_data->work, threeG_wakeup_work);
 
 	switch_data->irq = gpio_to_irq(switch_data->gpio);
 	printk("simdetect: irq is %d\n", switch_data->irq);
@@ -227,6 +257,8 @@ static int simdet_switch_probe(struct platform_device *pdev)
 
 #if defined(CONFIG_ARCH_ACER_T30)
 	irq_set_irq_type(switch_data->irq, IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING);
+
+	irq_set_irq_type(threegwake_data->irq, IRQF_TRIGGER_LOW);
 #endif
 
 	ret = request_irq(switch_data->irq, simdet_interrupt, IRQF_DISABLED | IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
@@ -237,69 +269,27 @@ static int simdet_switch_probe(struct platform_device *pdev)
 		goto err_request_irq;
 	}
 
-	simdet_switch_work(&switch_data->work);
-
-	switch_data->debounce_time = ktime_set(0, SIMDET_DEBOUNCE_TIME_MS*1000000);
-	hrtimer_init(&switch_data->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	switch_data->timer.function = detect_event_timer_func;
-
-	// For ThreeG wakeup pin
-	if (threegwake_data == NULL) {
-		threegwake_data = kzalloc(sizeof(struct threegwake_data), GFP_KERNEL);
-		if (!threegwake_data)
-			goto err_ignore_3gwake_failed;
-	}
-
-	threegwake_data->gpio = TEGRA_GPIO_PC7;
-	threegwake_data->irq = gpio_to_irq(TEGRA_GPIO_PC7);
-
-	printk("simdetect: 3G_WAKE irq is %d\n", threegwake_data->irq);
-	if (threegwake_data->irq < 0) {
-		ret = threegwake_data->irq;
-        printk("simdetect: 3G_WAKE gpio_to_irq failed\n");
-		goto err_ignore_3gwake_failed;
-	}
-
-	tegra_gpio_enable(threegwake_data->gpio);
-
-	ret = gpio_request(threegwake_data->gpio, "3G_WAKE");
-	if (ret < 0) {
-		printk("simdetect: TRGRA_GPIO_PC7 gpio_request failed");
-		goto err_ignore_3gwake_failed;
-	}
-
-
-	ret = gpio_direction_input(threegwake_data->gpio);
-	if (ret < 0) {
-		printk("simdetect: TEGRA_GPIO_PC7 gpio_direction_input failed");
-		goto err_ignore_3gwake_failed;
-	}
-
-	INIT_WORK(&threegwake_data->work, threeG_wakeup_work);
-
-#if defined(CONFIG_ARCH_ACER_T30)
-	irq_set_irq_type(threegwake_data->irq, IRQF_TRIGGER_LOW);
-#endif
-
 	ret = request_irq(threegwake_data->irq, ThreeGwake_interrupt, IRQF_DISABLED | IRQF_TRIGGER_LOW,
 			"3G_WAKE", threegwake_data);
 	if (ret) {
 		printk("simdetect: ThreeGwake request irq failed\n");
-		goto err_ignore_3gwake_failed;
+		goto err_request_irq;
 	}
 
 	// set current status
+	simdet_switch_work(&switch_data->work);
+
 	threeG_wakeup_work(&threegwake_data->work);
 
 	// hrtimer
+	switch_data->debounce_time = ktime_set(0, SIMDET_DEBOUNCE_TIME_MS*1000000);
+	hrtimer_init(&switch_data->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	switch_data->timer.function = detect_event_timer_func;
+
 	threegwake_data->debounce_time = ktime_set(0, THREEGWAKE_DEBOUNCE_TIME_MS*1000000);
 	hrtimer_init(&threegwake_data->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	threegwake_data->timer.function = wake_event_timer_func;
 
-err_ignore_3gwake_failed:
-    if (threegwake_data) {
-        kfree(threegwake_data);
-    }
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	switch_data_priv = switch_data;
 
@@ -385,7 +375,11 @@ static int __init simdet_switch_init(void)
 #if defined(CONFIG_ARCH_ACER_T30)
 	// Initialize 3G_DISABLE PIN (TEGRA_GPIO_PI7)
 	gpio_request(TEGRA_GPIO_PI7,"3G_DISABLE");
-	gpio_direction_output(TEGRA_GPIO_PI7, GPIO_HIGH);
+	if (acer_sku == BOARD_SKU_WIFI) {
+		gpio_direction_output(TEGRA_GPIO_PI7, GPIO_LOW);
+	} else {
+		gpio_direction_output(TEGRA_GPIO_PI7, GPIO_HIGH);
+	}
 	tegra_gpio_enable(TEGRA_GPIO_PI7);
 #endif
 

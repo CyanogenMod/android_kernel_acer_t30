@@ -31,6 +31,9 @@
 #include "usb.h"
 
 
+#if defined(CONFIG_ARCH_ACER_T30)
+int modem_ready = 1;
+#endif
 #ifdef CONFIG_HOTPLUG
 
 /*
@@ -1310,6 +1313,11 @@ int usb_suspend(struct device *dev, pm_message_t msg)
 {
 	struct usb_device	*udev = to_usb_device(dev);
 
+#if defined(CONFIG_ARCH_ACER_T30)
+	if(udev && udev->manufacturer && (memcmp(udev->manufacturer, "Huawei", 6) == 0)) {
+		modem_ready = 0;
+	}
+#endif
 	do_unbind_rebind(udev, DO_UNBIND);
 	choose_wakeup(udev, msg);
 	return usb_suspend_both(udev, msg);
@@ -1346,6 +1354,11 @@ int usb_resume(struct device *dev, pm_message_t msg)
 	 */
 	if (status == -ENODEV || status == -ESHUTDOWN)
 		status = 0;
+#if defined(CONFIG_ARCH_ACER_T30)
+	if(udev && udev->manufacturer && (memcmp(udev->manufacturer, "Huawei", 6) == 0)) {
+		modem_ready = 1;
+	}
+#endif
 	return status;
 }
 

@@ -1284,6 +1284,7 @@ static void __init tegra_cardhu_init(void)
 				ARRAY_SIZE(throttle_list));
 	tegra_clk_init_from_table(cardhu_clk_init_table);
 	cardhu_pinmux_init();
+	gpio_unused_init();
 	tegra_booting_info();
 	cardhu_i2c_init();
 	cardhu_spi_init();

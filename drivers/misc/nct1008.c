@@ -769,6 +769,37 @@ static int __devinit nct1008_configure_irq(struct nct1008_data *data)
 			data);
 }
 
+#if defined(CONFIG_ARCH_ACER_T30)
+static unsigned int get_ext_mode_delay_ms(unsigned int conv_rate)
+{
+	switch (conv_rate) {
+	case 0:
+		return 16000;
+	case 1:
+		return 8000;
+	case 2:
+		return 4000;
+	case 3:
+		return 2000;
+	case 4:
+		return 1000;
+	case 5:
+		return 500;
+	case 6:
+		return 250;
+	case 7:
+		return 125;
+	case 9:
+		return 32;
+	case 10:
+		return 16;
+	case 8:
+	default:
+		return 63;
+	}
+}
+#endif
+
 int nct1008_thermal_get_temp(struct nct1008_data *data, long *temp)
 {
 	return nct1008_get_temp(&data->client->dev, temp, NULL);
@@ -888,6 +919,7 @@ static int __devinit nct1008_probe(struct i2c_client *client,
 {
 	struct nct1008_data *data;
 	int err;
+	unsigned int delay;
 
 	data = kzalloc(sizeof(struct nct1008_data), GFP_KERNEL);
 	if (!data)
@@ -929,6 +961,16 @@ static int __devinit nct1008_probe(struct i2c_client *client,
 	err = nct1008_debuginit(data);
 	if (err < 0)
 		err = 0; /* without debugfs we may continue */
+
+#if defined(CONFIG_ARCH_ACER_T30)
+	/* switch to extended mode reports correct temperature
+	 * from next measurement cycle */
+	if (data->plat_data.ext_range) {
+		delay = get_ext_mode_delay_ms(
+			data->plat_data.conv_rate);
+		msleep(delay); /* 63msec for default conv rate 0x8 */
+	}
+#endif
 
 	/* notify callback that probe is done */
 	if (data->plat_data.probe_callback)

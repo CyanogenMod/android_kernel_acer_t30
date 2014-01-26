@@ -1218,31 +1218,31 @@ int mpu_probe(struct i2c_client *client, const struct i2c_device_id *devid)
 	else
 		printk(KERN_INFO"Read Compass product id failed\n");
 
-	gsensor_dev_info_kobj = kobject_create_and_add("dev_info_g-sensor", NULL);
+	gsensor_dev_info_kobj = kobject_create_and_add("dev-info_g-sensor", NULL);
 	if (gsensor_dev_info_kobj == NULL) {
-		printk(KERN_INFO"dev_info_g-sensor: Create kobject failed\n");
+		printk(KERN_INFO"dev-info_g-sensor: Create kobject failed\n");
 	} else {
 		res = sysfs_create_group(gsensor_dev_info_kobj, &g_attr_group);
 		if (res)
-			printk(KERN_INFO"dev_info_g-sensor: Create g_attr_group failed\n");
+			printk(KERN_INFO"dev-info_g-sensor: Create g_attr_group failed\n");
 	}
 
-	gyro_dev_info_kobj = kobject_create_and_add("dev_info_gyro-sensor", NULL);
+	gyro_dev_info_kobj = kobject_create_and_add("dev-info_gyro-sensor", NULL);
 	if (gyro_dev_info_kobj == NULL) {
-		printk(KERN_INFO"dev_info_gyro-sensor: Create kobject failed\n");
+		printk(KERN_INFO"dev-info_gyro-sensor: Create kobject failed\n");
 	} else {
 		res = sysfs_create_group(gyro_dev_info_kobj, &gyro_attr_group);
 		if (res)
-			printk(KERN_INFO"dev_info_gyro-sensor: Create gyro_attr_group failed\n");
+			printk(KERN_INFO"dev-info_gyro-sensor: Create gyro_attr_group failed\n");
 	}
 
-	compass_dev_info_kobj = kobject_create_and_add("dev_info_e-compass", NULL);
+	compass_dev_info_kobj = kobject_create_and_add("dev-info_e-compass", NULL);
 	if (compass_dev_info_kobj == NULL) {
-		printk(KERN_INFO"dev_info_e-compass: Create kobject failed\n");
+		printk(KERN_INFO"dev-info_e-compass: Create kobject failed\n");
 	} else {
 		res = sysfs_create_group(compass_dev_info_kobj, &compass_attr_group);
 		if (res)
-			printk(KERN_INFO"dev_info_e-compass: Create compass_attr_group failed\n");
+			printk(KERN_INFO"dev-info_e-compass: Create compass_attr_group failed\n");
 	}
 
 	return res;

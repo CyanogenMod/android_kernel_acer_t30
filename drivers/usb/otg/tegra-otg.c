@@ -175,7 +175,9 @@ static void tegra_stop_host(struct tegra_otg_data *tegra)
 	struct platform_device *pdev = tegra->pdev;
 
 	DBG("%s(%d) Begin\n", __func__, __LINE__);
-
+#if defined(CONFIG_ARCH_ACER_T30)
+	wake_lock(&usb_wake_lock);
+#endif
 	if (pdev) {
 		/* unregister host from otg */
 		kfree(pdev->dev.platform_data);
@@ -183,7 +185,9 @@ static void tegra_stop_host(struct tegra_otg_data *tegra)
 		platform_device_unregister(pdev);
 		tegra->pdev = NULL;
 	}
-
+#if defined(CONFIG_ARCH_ACER_T30)
+	wake_unlock(&usb_wake_lock);
+#endif
 	DBG("%s(%d) End\n", __func__, __LINE__);
 }
 
@@ -551,11 +555,13 @@ static int tegra_otg_suspend(struct device *dev)
 	DBG("%s(%d) BEGIN state : %s\n", __func__, __LINE__,
 					tegra_state_name(otg->state));
 
+#if !defined(CONFIG_ARCH_ACER_T30)
 	clk_enable(tegra->clk);
 	val = otg_readl(tegra, USB_PHY_WAKEUP);
 	val &= ~(USB_ID_INT_EN | USB_VBUS_INT_EN);
 	otg_writel(tegra, val, USB_PHY_WAKEUP);
 	clk_disable(tegra->clk);
+#endif
 
 	/* Suspend peripheral mode, host mode is taken care by host driver */
 	if (otg->state == OTG_STATE_B_PERIPHERAL)
@@ -602,9 +608,31 @@ static void tegra_otg_resume(struct device *dev)
 	DBG("%s(%d) END\n", __func__, __LINE__);
 }
 
+#if defined(CONFIG_ARCH_ACER_T30)
+static int tegra_otg_prepare(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct tegra_otg_data *tegra = platform_get_drvdata(pdev);
+	int val;
+	DBG("%s(%d) BEGIN\n", __func__, __LINE__);
+
+	clk_enable(tegra->clk);
+	val = otg_readl(tegra, USB_PHY_WAKEUP);
+	val &= ~(USB_ID_INT_EN | USB_VBUS_INT_EN);
+	otg_writel(tegra, val, USB_PHY_WAKEUP);
+	clk_disable(tegra->clk);
+
+	DBG("%s(%d) END\n", __func__, __LINE__);
+	return 0;
+}
+#endif
+
 static const struct dev_pm_ops tegra_otg_pm_ops = {
 	.complete = tegra_otg_resume,
 	.suspend = tegra_otg_suspend,
+#if defined(CONFIG_ARCH_ACER_T30)
+	.prepare = tegra_otg_prepare,
+#endif
 };
 #endif
 

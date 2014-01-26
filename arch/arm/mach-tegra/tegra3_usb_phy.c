@@ -468,7 +468,7 @@
 #define DBG(stuff...)	do {} while (0)
 #endif
 
-#if 0
+#if 1
 #define PHY_DBG(stuff...)	pr_info("tegra3_usb_phy: " stuff)
 #else
 #define PHY_DBG(stuff...)	do {} while (0)
@@ -603,7 +603,14 @@ static void utmip_setup_pmc_wake_detect(struct tegra_usb_phy *phy)
 	/* config debouncer */
 	val = readl(pmc_base + PMC_USB_DEBOUNCE);
 	val &= ~UTMIP_LINE_DEB_CNT(~0);
-	val |= UTMIP_LINE_DEB_CNT(1);
+#ifdef CONFIG_ARCH_ACER_T30
+	if (phy->inst == 0 || phy->inst == 2)
+		val |= UTMIP_LINE_DEB_CNT(1);
+	else
+		val |= UTMIP_LINE_DEB_CNT(4);
+#else
+	val |= UTMIP_LINE_DEB_CNT(4);
+#endif
 	writel(val, pmc_base + PMC_USB_DEBOUNCE);
 
 	/* Make sure nothing is happening on the line with respect to PMC */
@@ -631,12 +638,6 @@ static void utmip_setup_pmc_wake_detect(struct tegra_usb_phy *phy)
 	val &= ~USBOP_VAL(inst);
 	val &= ~USBON_VAL(inst);
 	writel(val, pmc_base + PMC_UTMIP_UHSIC_FAKE);
-
-	/* Enable which type of event can trigger a walk,
-	in this case usb_line_wake */
-	val = readl(pmc_base + PMC_SLEEPWALK_CFG);
-	val |= UTMIP_LINEVAL_WALK_EN(inst);
-	writel(val, pmc_base + PMC_SLEEPWALK_CFG);
 
 	/* Enable which type of event can trigger a walk,
 	* in this case usb_line_wake */
@@ -1231,6 +1232,8 @@ static int utmi_phy_irq(struct tegra_usb_phy *phy)
 {
 	void __iomem *base = phy->regs;
 	unsigned long val = 0;
+	bool remote_wakeup = false;
+	int irq_status = IRQ_HANDLED;
 
 	if (phy->phy_clk_on) {
 		DBG("%s(%d) inst:[%d]\n", __func__, __LINE__, phy->inst);
@@ -1242,8 +1245,10 @@ static int utmi_phy_irq(struct tegra_usb_phy *phy)
 
 	usb_phy_fence_read(phy);
 	/* check if there is any remote wake event */
-	if (utmi_phy_remotewake_detected(phy))
+	if (utmi_phy_remotewake_detected(phy)) {
 		pr_info("%s: utmip remote wake detected\n", __func__);
+		remote_wakeup = true;
+	}
 
 	if (phy->pdata->u_data.host.hot_plug) {
 		val = readl(base + USB_SUSP_CTRL);
@@ -1253,17 +1258,23 @@ static int utmi_phy_irq(struct tegra_usb_phy *phy)
 			writel(val , (base + USB_SUSP_CTRL));
 			pr_info("%s: usb device plugged-in\n", __func__);
 			val = readl(base + USB_USBSTS);
-			if (!(val  & USB_USBSTS_PCI))
-				return IRQ_NONE;
+			if (!(val  & USB_USBSTS_PCI)) {
+				irq_status = IRQ_NONE;
+				goto exit;
+			}
 			val = readl(base + USB_PORTSC);
 			val &= ~(USB_PORTSC_WKCN | USB_PORTSC_RWC_BITS);
 			writel(val , (base + USB_PORTSC));
 		} else if (!phy->phy_clk_on) {
-			return IRQ_NONE;
+			if (remote_wakeup)
+				irq_status = IRQ_HANDLED;
+			else
+				irq_status = IRQ_NONE;
+			goto exit;
 		}
 	}
-
-	return IRQ_HANDLED;
+exit:
+	return irq_status;
 }
 
 static void utmi_phy_enable_obs_bus(struct tegra_usb_phy *phy)
@@ -1483,7 +1494,14 @@ static int utmi_phy_power_off(struct tegra_usb_phy *phy)
 			writel(val, base + USB_PORTSC);
 
 			val = readl(base + USB_SUSP_CTRL);
+#if defined(CONFIG_ARCH_ACER_T30)
+			if(phy->inst == 1)
+				val |= USB_PHY_CLK_VALID_INT_ENB;
+			else
+				val &= ~USB_PHY_CLK_VALID_INT_ENB;
+#else
 			val |= USB_PHY_CLK_VALID_INT_ENB;
+#endif
 			writel(val, base + USB_SUSP_CTRL);
 		} else {
 			val = readl(base + USB_PORTSC);
@@ -1689,7 +1707,7 @@ static void utmi_phy_restore_end(struct tegra_usb_phy *phy)
 			val = readl(base + USB_PORTSC);
 			udelay(1);
 			if (wait_time_us == 0) {
-				PHY_DBG("%s PMC REMOTE WAKEUP FPR timeout val = 0x%x instance = %d\n", __func__, val, phy->inst);
+				PHY_DBG("%s PMC REMOTE WAKEUP FPR timeout val = 0x%x instance = %d\n", __func__, (int)val, phy->inst);
 				utmip_phy_disable_pmc_bus_ctrl(phy);
 				utmi_phy_post_resume(phy);
 				return;
